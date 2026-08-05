@@ -62,37 +62,47 @@ answer is probably a driver-declared capability rather than a per-assertion
 guard, and this section reopens together with the two-implementation extraction
 below.
 
+### Where assertion paths are rooted — `restore.strip_prefix`
+Backups store absolute paths and a restore reproduces them, so a snapshot of
+`/home/app/data` lands at `<restoredir>/home/app/data`. Without something, every
+assertion has to spell that prefix out: `path_exists:
+home/app/data/config.php`. Unguessable from the config, and it breaks whenever
+the source machine's layout changes.
+
+Set the prefix once per target; assertions are written relative to it.
+Three routes were on the table:
+
+- restic's `restore latest:<path>` flattens that subtree to the restore root.
+  Verified working on 0.18.0 and the least code, rejected because it pins core
+  to restic, which CLAUDE.md forbids.
+- Infer the common prefix from the restored tree. Best ergonomics, rejected
+  because a snapshot can cover two unrelated paths and a wrong guess moves the
+  root of every assertion silently — the worst available failure shape.
+- An explicit config field. Chosen: one more thing to get right, but wrong in a
+  way that is loud.
+
+Resolved in the runner rather than the driver, so the restore still produces the
+full tree and only `Env.RestoreDir` moves. `driver.Driver` stays untouched,
+which matters given it has already changed twice.
+
+**A prefix not present in the restored tree is an error, never a verdict.** This
+is the whole point. A wrong prefix roots every assertion at an empty directory,
+and the target then reports a list of entirely convincing failures about a
+backup that is fine. That happened in a live regression run during session 5 —
+the lab's snapshot recorded a path from before the directory was moved — which
+is what turned this from a papercut into a decision. The error names `restic
+snapshots --json` as where the right value comes from.
+
+Resolution goes through `safepath`, so a symlink in the restored tree cannot
+point the assertion root outside the restore directory. That shared use is why
+`safepath` became its own package rather than staying unexported inside
+`assert`.
+
+**Revisit when:** a driver appears whose restore has no meaningful path prefix
+at all — a `pg_dump` loaded into a container is the obvious one. The field
+should then be documented as file-path-driver-only rather than quietly ignored.
+
 ## Open questions (deferred, with reasons)
-
-### Assertion paths carry the backup's original absolute path — unresolved
-restic stores absolute paths and reproduces them under the restore target, so a
-snapshot of `/home/user/constat-lab/data` restored into a temp directory lands
-at `<restoredir>/home/user/constat-lab/data`. Every file assertion's `path:`
-must therefore be written as `home/user/constat-lab/data/config.php`, not
-`config.php`.
-
-This is bad on three counts: it is unguessable from the config alone, it
-silently breaks when a machine's layout changes, and a wrong prefix reads as a
-legitimate FAIL rather than as a config error — the exact failure shape the
-`Requires()` decision above was designed to avoid elsewhere. It bit a live
-regression run during session 5: the lab's snapshot recorded a path from before
-the directory was moved, and four assertions failed convincingly for the wrong
-reason.
-
-Three routes, none taken yet:
-
-- `restic restore latest:<path> --target dir` flattens that subtree to the
-  restore root. Verified working on 0.18.0. Cheapest fix, but it is a
-  restic-specific escape hatch and CLAUDE.md forbids restic leaking into core.
-- A `restore.strip_prefix:` or `restore.root:` config field, driver-agnostic
-  but one more thing the operator has to get right.
-- The runner detects the single common prefix of the restored tree and points
-  `Env.RestoreDir` at it. Best config ergonomics, most magic, and ambiguous the
-  moment a snapshot covers two unrelated paths.
-
-**Revisit when:** session 11 writes the install documentation, or earlier if
-session 6's fixture corpus makes the prefix handling painful to express. It is
-a config-schema decision, so it is the author's.
 
 ### Severity on `Result` — deferred
 `Result` carries `Duration` but not `Severity`. Duration is passive: it gets
