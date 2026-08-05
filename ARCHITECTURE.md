@@ -327,6 +327,37 @@ the author's.
 **Revisit when:** a second algorithm is wanted. `Signature.Algorithm` is
 recorded per report precisely so adding one does not make old reports ambiguous.
 
+### Webhook config lives at the top level, not per-target
+A signed report is one run's outcome across every target; alerting is about
+that run, not about any single target succeeding or failing in isolation. Per-
+target webhooks would mean deciding how to dedupe five notifications from one
+`constat run`, and there was no case that needed it.
+
+**Revisit when:** an operator wants different destinations for different
+targets — a "app-db is critical, alert PagerDuty; lab-files is not, alert
+Slack" split. That's a real future need, not an imagined one, and the answer is
+probably `webhook:` becoming allowed at both levels with target overriding
+top-level, not replacing the top-level block.
+
+### Webhook format is a config choice, never sniffed from the URL
+"Looks like ntfy.sh" is exactly the guess that stops being right the day an
+operator self-hosts ntfy under their own domain, or points Healthchecks.io
+through a reverse proxy. `format:` is explicit, defaults to `generic`, and is
+validated where the webhook is actually sent (`cmd/constat/main.go`) rather than
+at config load — same reason `source.kind` is validated in `internal/run`, not
+`internal/config`: config has no dependency on the package that knows which
+values are real.
+
+### A webhook URL is redacted the way an error, not appended
+`net/http`'s own errors are `*url.Error`, and `Error()` embeds the complete
+request URL. A webhook URL is operator-controlled and can carry its own secret
+in the path — a Discord webhook token, a private ntfy topic — so a naive
+`fmt.Errorf("%v (redacted)", err)` still leaks: the leak is inside `err`, not
+appended after it. `redactURL` unwraps `*url.Error` and discards its URL half
+outright, keeping only the underlying cause and a host-only destination string
+built separately from the parsed URL. Found while writing the redaction, not
+assumed correct — the first version was wrong and a test caught it.
+
 ## Open questions (deferred, with reasons)
 
 ### What the report deliberately does not record
