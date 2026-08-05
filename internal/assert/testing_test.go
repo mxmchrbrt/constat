@@ -22,6 +22,6 @@ func (f *fakeDriver) Latest(ctx context.Context) (*driver.Snapshot, error) {
 	return f.latest, nil
 }
 
-func (f *fakeDriver) Restore(ctx context.Context, dest string) error {
+func (f *fakeDriver) Restore(ctx context.Context, dest string, paths []string) error {
 	return f.restoreErr
 }

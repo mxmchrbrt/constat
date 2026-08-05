@@ -24,6 +24,10 @@ func newSnapshotAge(node *yaml.Node) (Assertion, error) {
 	return &snapshotAge{maxAge: maxAge}, nil
 }
 
+// Requires no restore: this check reads snapshot metadata only, which is the
+// entire point of keeping Driver.Latest separate from Driver.Restore.
+func (a *snapshotAge) Requires() Requirements { return Requirements{} }
+
 func (a *snapshotAge) Check(ctx context.Context, env Env) (Result, error) {
 	start := time.Now()
 
