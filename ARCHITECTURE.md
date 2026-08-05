@@ -195,6 +195,73 @@ finds it confusing. The fix then is a clearer message, not a reclassification �
 moving load failures to ERROR would take the alert away from the case that
 needs it most.
 
+### The version check is a pre-load gate, not an assertion
+The plan had `dump_version_matches` in the `assert:` list. It could not work
+there, and the reason is worth keeping: a 16 dump into a 15 server fails during
+the load, so an assertion running afterwards never executes for the one case it
+exists for. What the operator would actually see is a wall of psql syntax
+errors.
+
+So the check runs between "server is up" and "psql starts". It reads the
+version pg_dump writes into the header, compares major versions against the
+running server, and on a mismatch reports a `LoadError` — which the runner
+already treats as a FAIL, because a dump that cannot load into the operator's
+own image is a verdict about the backup.
+
+Three properties chosen deliberately:
+
+- **Only newer-into-older is rejected.** Older into newer is supported by
+  Postgres and is what an upgrade looks like. Flagging it would fail runs that
+  are working exactly as intended.
+- **Minor versions are ignored.** 16.2 into 16.14 is fine, and comparing them
+  would generate noise indistinguishable from the real signal.
+- **An unreadable header is not an error.** Custom-format dumps and
+  hand-written SQL have no such line, and they are loaded anyway. The gate
+  improves the message where it can; refusing what it does not understand would
+  turn a diagnostic into an obstacle.
+
+**Revisit when:** custom-format dumps (`pg_dump -Fc`) are supported. Their
+version lives in the archive header rather than a comment, so the parser gains a
+second shape — and `pg_restore`, not psql, becomes the loader.
+
+### Query assertions: what is a verdict, what is the operator's mistake
+The queries come from the operator's own config, so SQL injection is not the
+threat model — an operator who wants to run arbitrary SQL against their own
+restored backup may. The real risks are a query that hangs and a query that
+returns something other than what the assertion expects.
+
+Both are handled once, in `query_support.go`, rather than in each assertion:
+
+- A context deadline **and** a server-side `statement_timeout`. The first stops
+  constat waiting; the second stops the server working. Without the second, a
+  cancelled query keeps burning time inside a container about to be destroyed.
+- A scan that checks exactly one row and exactly one column instead of assuming
+  either. A wrong-shaped query would otherwise produce a confident wrong answer,
+  which is the failure this project can least afford.
+- A **read-only transaction**. A verification must not be able to modify the
+  data it is verifying, however the operator writes the SQL.
+
+The boundary between verdict and error:
+
+| Situation | Reported as | Why |
+|---|---|---|
+| Count below `min`, or newest row too old | FAIL | The finding. |
+| Table does not exist (SQLSTATE 42P01) | FAIL | Taxonomy #2 — a table that should be there and is not. |
+| Any other SQL error | ERROR | A typo in a column name is the operator's mistake, not the backup's. |
+| `query_newer_than` gets NULL or no rows | FAIL | An empty table is how MAX() answers "nothing to date". |
+| `query_min` gets NULL or no rows | ERROR | A count query cannot do that, so the query is not a count. |
+| Timestamp in the future | ERROR | Same call as sessions 1 and 5: an untrustworthy answer must never read as a pass. |
+
+The asymmetry in the middle two rows is deliberate and is the part most likely
+to look like an inconsistency later. `query_newer_than` asks "how fresh is the
+data", and an empty table answers that question — badly, which is the verdict.
+`query_min` asks for a number, and NULL is not a number, so the query is wrong.
+
+Splitting 42P01 from other SQL errors costs a `pgconn` import inside
+`internal/assert`, which is the first Postgres-specific thing in the assertion
+model. **Revisit when:** a second engine arrives — that import and `Env.DB` are
+the two places that will need generalising, and they should move together.
+
 ## Open questions (deferred, with reasons)
 
 ### Container hardening stops short of read-only and dropped capabilities
