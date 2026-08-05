@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -67,7 +68,7 @@ func (d *ResticDriver) Latest(ctx context.Context) (*Snapshot, error) {
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("restic snapshots: %w (output: %s)", err, out)
+		return nil, fmt.Errorf("restic snapshots: %w (output: %s)", err, trimOutput(out))
 	}
 
 	var raw []struct {
@@ -107,7 +108,35 @@ func (d *ResticDriver) Restore(ctx context.Context, dest string, paths []string)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("restic restore: %w (output: %s)", err, out)
+		return fmt.Errorf("restic restore: %w (output: %s)", err, trimOutput(out))
 	}
 	return nil
+}
+
+// maxErrorOutput bounds how much of restic's output is carried into an error.
+//
+// This is a correctness bound, not tidiness. A restic error carries one line
+// per affected file: a truncated pack in a repository of 400 files produces
+// roughly 276 KB of output, and a real repository has orders of magnitude more
+// files than that. Those bytes do not stay local — the error becomes an
+// assertion message, which is written verbatim into report.json and posted as
+// the webhook body.
+//
+// Left unbounded, the failure compounds in the worst direction: the more
+// broken the backup, the larger the payload, until the alert that was supposed
+// to report the breakage is itself rejected for being oversized. An alert that
+// fails precisely when it matters is worse than no alert.
+//
+// internal/container.trim does the same job for docker/podman output. The two
+// are deliberately separate small copies rather than a shared package: each is
+// a handful of lines with no logic to get wrong, and neither package otherwise
+// depends on the other. A third caller should trigger extraction.
+const maxErrorOutput = 2000
+
+func trimOutput(out []byte) string {
+	s := strings.TrimSpace(string(out))
+	if len(s) > maxErrorOutput {
+		return s[:maxErrorOutput] + "… (truncated)"
+	}
+	return s
 }
