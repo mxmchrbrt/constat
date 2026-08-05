@@ -419,3 +419,44 @@ func TestLoad_Webhook_UnknownFormatPreservedNotRejected(t *testing.T) {
 		t.Errorf("Format = %q, want it preserved verbatim", cfg.Webhook.Format)
 	}
 }
+
+func TestLoad_Signing(t *testing.T) {
+	tests := []struct {
+		name    string
+		block   string
+		wantErr string
+	}{
+		{name: "no signing block is fine", block: ""},
+		{name: "key_file set", block: "signing:\n  key_file: /etc/constat/signing.key\n"},
+		{
+			name:    "empty key_file",
+			block:   "signing:\n  key_file: \"\"\n",
+			wantErr: "signing.key_file is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := load(t, validYAML+tt.block)
+
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected an error containing %q, got none", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("error %q does not contain %q", err, tt.wantErr)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			// No signing block must decode to nil, so a run without one is
+			// unsigned rather than failing to find a key.
+			if tt.block == "" && cfg.Signing != nil {
+				t.Error("absent signing block must decode to nil")
+			}
+		})
+	}
+}

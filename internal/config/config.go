@@ -18,6 +18,21 @@ type Config struct {
 	// signed report is one run's outcome, and alerting is about that run, not
 	// about any single target inside it.
 	Webhook *Webhook `yaml:"webhook"`
+
+	// Signing, when set, signs the report. Optional deliberately: an unsigned
+	// report is a legitimate output for an operator who just wants to know
+	// whether their backup restores, and requiring key management to get that
+	// answer would put the useful part behind the ceremonial one.
+	Signing *Signing `yaml:"signing"`
+}
+
+// Signing names the ed25519 private key used to sign reports.
+//
+// A path, never the key itself. A key pasted into a config file is a key in
+// every backup of that config, in the operator's editor history, and one
+// mis-scoped file permission away from being public.
+type Signing struct {
+	KeyFile string `yaml:"key_file"`
 }
 
 type Target struct {
@@ -217,6 +232,12 @@ func validate(cfg *Config, root *yaml.Node) error {
 		}
 		if w.MaxAttempts < 0 {
 			return fmt.Errorf("webhook.max_attempts must not be negative, got %d", w.MaxAttempts)
+		}
+	}
+
+	if s := cfg.Signing; s != nil {
+		if s.KeyFile == "" {
+			return fmt.Errorf("signing.key_file is required when a signing block is present")
 		}
 	}
 

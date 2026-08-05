@@ -12,6 +12,7 @@ import (
 	"github.com/mxmchrbrt/constat/internal/config"
 	"github.com/mxmchrbrt/constat/internal/report"
 	"github.com/mxmchrbrt/constat/internal/run"
+	"github.com/mxmchrbrt/constat/internal/signing"
 	"github.com/mxmchrbrt/constat/internal/webhook"
 )
 
@@ -22,10 +23,23 @@ import (
 var version = "dev"
 
 func main() {
+	// Subcommand dispatch before flag parsing, so the original
+	// `constat [flags] <config.yaml>` form keeps working unchanged.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "keygen":
+			os.Exit(keygen(os.Args[2:]))
+		case "verify":
+			os.Exit(verify(os.Args[2:]))
+		}
+	}
+
 	reportPath := flag.String("report", "", "write a JSON report to this path (- for stdout)")
 	htmlPath := flag.String("html", "", "write an HTML report to this path (- for stdout)")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: constat [flags] <config.yaml>")
+		fmt.Fprintln(os.Stderr, "       constat keygen -out <path>")
+		fmt.Fprintln(os.Stderr, "       constat verify -key <public-key> <report.json>")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -46,6 +60,24 @@ func main() {
 	// leave scratch directories behind.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// The signing key is loaded before any verification runs, deliberately.
+	// It is cheap, and the alternative is doing an hour of restores and then
+	// discovering the key is missing or group-readable — the run's evidence
+	// lost at the last step, with nothing to re-sign it from.
+	//
+	// A configured-but-unusable key is fatal rather than a fallback to an
+	// unsigned report: an operator who asked for signed evidence and silently
+	// got unsigned output would not find out until someone tried to verify it.
+	var signer report.Signer
+	if cfg.Signing != nil {
+		s, err := signing.LoadSigner(cfg.Signing.KeyFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
+		signer = s
+	}
 
 	// One timestamp for the whole run, taken before any work: every target in
 	// a report should carry the same "as of", and reading the clock per target
@@ -75,10 +107,7 @@ func main() {
 	rep := report.New(startedAt, host, version, targets)
 
 	if *reportPath != "" {
-		// Signing is not wired up: implementing Signer is the author's, per
-		// CLAUDE.md. Passing nil writes an unsigned report, which is a
-		// legitimate output rather than a degraded one.
-		if err := writeReport(*reportPath, rep, nil); err != nil {
+		if err := writeReport(*reportPath, rep, signer); err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 			os.Exit(1)
 		}
