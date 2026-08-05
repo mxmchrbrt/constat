@@ -1,3 +1,33 @@
+## Decided
+
+### How an assertion declares what the runner must set up — `Requires()`
+Every `Assertion` implements `Requires() Requirements`, currently
+`Requirements{Restore bool}`.
+
+Three shapes were on the table. An optional marker interface (`io.WriterTo`
+style, core type-asserts) is the idiomatic Go answer and was rejected on
+failure shape: an author who forgets the marker gets an empty `RestoreDir` and
+a confusing FAIL rather than a compile error, which is exactly wrong for a tool
+whose promise is certainty. A `NeedsRestore() bool` was rejected because
+session 7 adds a second requirement — a live database container — which would
+force widening the interface a second time, breaking every assertion again.
+
+The struct absorbs that: `Requirements` gains a field, `Assertion` does not
+change. This is CLAUDE.md's "research broad, ship narrow" applied to the
+smallest possible surface — the model is wide, today's implementation is one
+bool.
+
+**Revisit when:** a requirement appears that isn't a boolean — something
+parameterised, like "a container running *this* image". At that point
+`Requirements` stops being a set of flags and the question reopens.
+
+### Per-target timeout default — 1 hour
+Bounds restore plus every assertion. Chosen over unbounded (a hung restic would
+hang the run forever, which is the failure mode #10 the timeout exists to
+catch) and over 6 hours (large restores would work unconfigured, weakening the
+RTO signal). A 500 GB target must set `timeout:` explicitly, which is the
+point: it forces the operator to state their RTO rather than discover it.
+
 ## Open questions (deferred, with reasons)
 
 ### Severity on `Result` — deferred
