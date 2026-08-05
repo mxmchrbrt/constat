@@ -116,10 +116,59 @@ type Container struct {
 	HostPort string
 }
 
+// startAttempts bounds how many times Start will retry a container that
+// failed to come up.
+//
+// The failure this exists for is port allocation. The published port is
+// kernel-assigned, and between the kernel choosing it and the runtime binding
+// it, something else on the host can take it — rootless podman's pasta
+// networking reports this as "Failed to bind port N". It is rare, it is
+// transient, and a fresh attempt gets a different port.
+//
+// Retrying is worth it because the alternative is a spurious ERROR verdict on
+// a backup that is fine. constat classifies that correctly — the tool could
+// not run, rather than the backup being broken — but an operator woken by it
+// still has to work that out, and alert fatigue is how real failures get
+// ignored.
+//
+// Three, not more: a port collision that survives three fresh ports is not a
+// collision, it is something that will not fix itself by waiting.
+const startAttempts = 3
+
 // Start runs the container detached and returns a handle. The handle is
 // returned even on some failure paths precisely so the caller can always defer
 // Stop; when the returned handle is nil there is nothing to clean up.
+//
+// A transient port-binding failure is retried with a completely fresh
+// container — new name, new scratch directory, new kernel-assigned port — and
+// the failed attempt is torn down before the next one begins.
 func (r *Runtime) Start(ctx context.Context, spec Spec) (*Container, error) {
+	var lastErr error
+
+	for attempt := 1; attempt <= startAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		c, err := r.startOnce(ctx, spec)
+		if err == nil {
+			return c, nil
+		}
+		lastErr = err
+
+		if !retryablePortFailure(err) {
+			return nil, err
+		}
+		// startOnce has already cleaned up its own failed attempt.
+	}
+
+	return nil, fmt.Errorf("container did not start after %d attempts: %w", startAttempts, lastErr)
+}
+
+// startOnce is one complete attempt: its own name, its own scratch directory,
+// its own port. On any failure it removes whatever it created before
+// returning, so a retry never inherits state from the attempt before it.
+func (r *Runtime) startOnce(ctx context.Context, spec Spec) (*Container, error) {
 	suffix := make([]byte, 6)
 	if _, err := rand.Read(suffix); err != nil {
 		return nil, fmt.Errorf("generating container name: %w", err)
@@ -180,6 +229,32 @@ func (r *Runtime) Start(ctx context.Context, spec Spec) (*Container, error) {
 	c.HostPort = port
 
 	return c, nil
+}
+
+// retryablePortFailure reports whether err looks like the host losing a race
+// for the port the kernel just handed out.
+//
+// Matching on message text, which is unpleasant and is the price of shelling
+// out to a CLI rather than linking a library — there is no error code to read.
+// Kept deliberately narrow: matching too broadly would retry a missing image
+// or a broken daemon three times over, turning a fast, clear failure into a
+// slow one.
+func retryablePortFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"failed to bind port",       // pasta, rootless podman
+		"address already in use",    // generic bind failure
+		"port is already allocated", // docker
+		"bind: permission denied",   // a privileged port lost to another process
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // publishedPort asks the runtime which loopback port the container port landed
