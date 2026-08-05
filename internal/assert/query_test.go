@@ -65,6 +65,10 @@ func runWithDatabase(m *testing.M) int {
 	}
 
 	pg, err := container.StartPostgres(ctx, rt, testImage(), dump)
+	// Armed before the error check on purpose: a container that started and
+	// then failed must still be torn down, or a failing test run leaves a
+	// Postgres behind.
+	//lint:ignore SA5001 cleanup must be armed before the error is handled
 	defer pg.Close()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "starting postgres: %v\n", err)

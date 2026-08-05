@@ -244,6 +244,12 @@ func Target(ctx context.Context, t config.Target) report.Target {
 
 	if assert.AnyRequiresDatabase(assertions) {
 		db, loadFailed, err := openDatabase(ctx, t, env.RestoreDir)
+		// Deferred before the error is inspected, deliberately: openDatabase
+		// returns a non-nil handle whenever a container was started, including
+		// on the paths where it then failed. Checking err first and deferring
+		// after would leak exactly the container that failed to come up.
+		// Close is nil-safe and safe to call twice; both are tested.
+		//lint:ignore SA5001 cleanup must be armed before the error is handled
 		defer db.Close()
 
 		switch {
