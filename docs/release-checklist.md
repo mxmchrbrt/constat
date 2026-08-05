@@ -6,30 +6,29 @@ should do.
 
 ## Blockers — do not tag until these are resolved
 
-### 1. Report signing is not implemented (**author**)
+One remains: name reservation. Signing is done.
 
-The product's one-line description is a *signed*, dated statement of fact.
-Today constat produces an unsigned one. The format, the canonical
-serialisation, the envelope, `Write`, `VerifyEnvelope` and the `Signer` /
-`Verifier` interfaces are all built and tested against stubs — what is missing
-is any implementation of `Signer`.
+### 1. ~~Report signing is not implemented~~ — DONE
 
-`CLAUDE.md` keeps this with the author regardless of the v0 working-agreement
-pivot: key generation, loading, storage, and the ed25519 call itself. The
-remaining work is four bounded steps, spelled out in `ARCHITECTURE.md` under
-"Where the signing boundary sits".
+Implemented in session 12, at the author's explicit instruction waiving
+CLAUDE.md's signing-key carve-out for this one piece. The waiver is recorded in
+CLAUDE.md and is not repealed for future work.
 
-Two honest options, and this is a product call, not a technical one:
+ed25519, stdlib only. `constat keygen` creates a keypair; `signing.key_file` in
+the config signs each report; `constat verify -key <pub> <report>` checks one.
+Format and independent verification instructions are in
+[`verifying-reports.md`](verifying-reports.md).
 
-- **Implement it before tagging.** The description stays true and v0.1 is the
-  thing the brief describes.
-- **Ship v0.1 unsigned and say so.** README now states plainly that reports
-  are unsigned. This is defensible — the operational check is genuinely useful
-  without signatures — but the "evidence" positioning has to wait for v0.2, and
-  the announcement copy must not claim it.
+Verified beyond the test suite: a real signed report was checked with
+**openssl** — a completely separate ed25519 implementation — which accepted it
+and rejected a version with one flipped verdict. Signing that only its own
+tests believe in is not evidence.
 
-The README currently reflects the second option. If the first is chosen, that
-section needs updating back.
+Because this is the one part of the codebase the author did not write, and it
+is the part where a subtle error is least visible in a diff:
+**read `internal/signing` before trusting a signature from it**, and check it
+against `verifying-reports.md`, which is written as a specification rather than
+a description.
 
 ### 2. Name reservation (**author**)
 
@@ -59,7 +58,7 @@ correct for the post-release state and wrong until then.
   rather than suppressed blindly: both are deliberate `defer Close()` calls
   armed before their error check, which is what guarantees a half-started
   container is still torn down.
-- `go test -race ./...` — see "Known flake" below.
+- `go test -race ./...` — clean.
 - Secret-leak audit across every error path (below).
 - The Docker image builds and runs, with restic present and the version ldflag
   threaded through (session 11).
@@ -110,20 +109,22 @@ marker, matching what `internal/container` already did. Verified end to end: the
 same corrupt repository now produces a 2.7 KB report instead of ~276 KB, with
 the verdict unchanged.
 
-## Known flake
+## ~~Known flake~~ — fixed
 
-`internal/container` intermittently fails to start a container with
-`pasta failed ... Failed to bind port N`, under rootless podman. Seen once
-across the session's runs.
+`internal/container` intermittently failed to start a container with
+`pasta failed ... Failed to bind port N` under rootless podman: the published
+port is kernel-assigned, and another process on the host can take it between
+the kernel choosing it and the runtime binding it.
 
-constat's own behaviour is correct — it reports ERROR (the tool could not run),
-not FAIL (the backup is broken), which is the right side of that distinction.
-The flake is in the test's assumption that the container always starts.
+constat classified it correctly — ERROR (the tool could not run), not FAIL (the
+backup is broken) — but an operator woken by it still has to work that out, and
+alert fatigue is how real failures come to be ignored.
 
-Not fixed here, deliberately: adding retry logic to container startup at
-release time is a change to the lifecycle code that session 7 mutation-tested,
-and the failure mode is both rare and correctly classified. Worth revisiting if
-it recurs, or if an operator reports spurious ERROR verdicts.
+`Start` now makes up to three attempts, each a completely fresh container: new
+name, new scratch directory, new port, with the failed attempt torn down before
+the next begins. Only port-binding failures are retried — a missing image or a
+dead daemon still fails immediately, tested both ways. Session 7's teardown
+guarantee is unchanged and the container suite passes with zero leftovers.
 
 ## Still open from earlier sessions
 
@@ -136,11 +137,10 @@ it recurs, or if an operator reports spurious ERROR verdicts.
 
 ## Sequence, once the blockers are cleared
 
-1. Decide the signing question above.
-2. Reserve the name.
-3. `goreleaser release --snapshot --clean` — confirm the artifacts look right.
-4. Tag `v0.1.0` and push it; the release workflow drafts a GitHub release.
-5. Review the draft, then publish.
-6. Announce: Show HN, r/selfhosted, Lobsters, awesome-selfhosted PR, and
+1. Reserve the name.
+2. `goreleaser release --snapshot --clean` — confirm the artifacts look right.
+3. Tag `v0.1.0` and push it; the release workflow drafts a GitHub release.
+4. Review the draft, then publish.
+5. Announce: Show HN, r/selfhosted, Lobsters, awesome-selfhosted PR, and
    publish `docs/failure-modes.md` alongside — per the brief, it is the better
    of the two marketing assets.

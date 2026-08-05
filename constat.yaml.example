@@ -10,6 +10,12 @@
 #
 # Validate a config without running anything destructive:
 #   constat -report - your-config.yaml   # writes the report to stdout too
+#
+# Note that with the signing block at the bottom enabled, constat loads the
+# signing key before doing any work and exits if it is missing — so validating
+# this file verbatim stops there. That is the intended behaviour, not a bug:
+# a run that was asked for signed evidence must not quietly produce unsigned
+# output. Comment out the signing block, or point it at a real key.
 
 targets:
   # --- file path -------------------------------------------------------
@@ -115,3 +121,22 @@ targets:
 webhook:
   url: https://ntfy.sh/my-constat-alerts
   format: ntfy
+
+# Signs the report with an ed25519 key, making it verifiable evidence rather
+# than just a file someone could retype. Generate the key with:
+#
+#   constat keygen -out /etc/constat/signing.key
+#
+# and check a report with:
+#
+#   constat verify -key /etc/constat/signing.key.pub report.json
+#
+# Optional: leave this out and reports are unsigned, which is a perfectly good
+# operational check. If it IS set and the key is missing or readable by anyone
+# other than its owner, the run fails rather than silently writing an unsigned
+# report — asking for evidence and quietly not getting it is the worst outcome.
+#
+# See docs/verifying-reports.md for the format and how to verify without
+# constat at all.
+signing:
+  key_file: /etc/constat/signing.key

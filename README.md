@@ -2,7 +2,7 @@
 
 Prove your backups actually restore. constat takes an existing restic
 repository, restores it into a disposable environment, runs assertions
-against the result, and emits a dated JSON/HTML report — then alerts if
+against the result, and emits a signed, dated report — then alerts if
 anything's wrong.
 
 It never stores your backup data. It doesn't replace restic, Borg, or
@@ -17,17 +17,20 @@ finished — a tool whose job is telling you the truth about your backups has
 no business overstating itself.
 
 **Works:** restic repositories, file assertions, Postgres dump verification
-against a real disposable container, JSON and HTML reports, webhook alerting.
+against a real disposable container, JSON and HTML reports, webhook alerting,
+and ed25519-signed reports — verifiable with `constat verify` or with ordinary
+tooling like openssl, per
+[`docs/verifying-reports.md`](docs/verifying-reports.md).
 
 **Not built yet:**
 
-- **Report signing.** The report format and canonical serialisation are
-  designed for it and the seam is in place, but no signature is produced
-  today. Reports are unsigned JSON — fine as an operational check, not yet
-  the tamper-evident evidence artifact the design is aiming at.
 - **Borg.** restic is the only `source.kind`. If you saw a Borg claim
   elsewhere, it was wrong; this is the correct statement.
 - **MySQL and other databases.** Postgres only.
+- **Key rotation.** `algorithm` and `key_id` are recorded per signature so a
+  second key can be introduced without making old reports ambiguous, but there
+  is no rotation tooling. Rotating today means keeping the old public key to
+  verify old reports.
 
 ## Five minutes to a first verification
 
@@ -100,6 +103,27 @@ an actual restore.
 constat -report report.json -html report.html constat.yaml
 ```
 
+To make the report verifiable evidence rather than just a file, generate a
+signing key and point the config at it:
+
+```bash
+constat keygen -out /etc/constat/signing.key
+```
+
+```yaml
+signing:
+  key_file: /etc/constat/signing.key
+```
+
+Anyone with the public half can then check it, without needing constat's
+config or anything secret:
+
+```bash
+constat verify -key /etc/constat/signing.key.pub report.json
+```
+
+**6. Alert on it.**
+
 ```yaml
 webhook:
   url: https://ntfy.sh/your-topic
@@ -109,7 +133,7 @@ webhook:
 Fires on pass and on fail, deliberately — an alert that only fires on
 failure can't tell "healthy" from "stopped running three weeks ago".
 
-**6. Run it on a schedule.** constat ships a scheduler *example*, not a
+**7. Run it on a schedule.** constat ships a scheduler *example*, not a
 scheduler — plug it into whatever you already use. A systemd timer is in
 [`examples/systemd/`](examples/systemd/):
 
