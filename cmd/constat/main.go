@@ -1,83 +1,85 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"time"
 
+	"github.com/mxmchrbrt/constat/internal/assert"
+	"github.com/mxmchrbrt/constat/internal/config"
+	"github.com/mxmchrbrt/constat/internal/driver"
 	"gopkg.in/yaml.v3"
 )
 
-type Config struct {
-	Targets []Target `yaml:"targets"`
-}
-
-type Target struct {
-	Name   string `yaml:"name"`
-	Source Source `yaml:"source"`
-	Assert Assert `yaml:"assert"`
-}
-
-type Source struct {
-	Kind         string `yaml:"kind"`
-	Repo         string `yaml:"repo"`
-	PasswordFile string `yaml:"password_file"`
-}
-
-type Assert struct {
-	NewestSnapshotAgeMax time.Duration `yaml:"newest_snapshot_age_max"`
-}
-
-type Snapshot struct {
-	ID      string    `json:"id"`
-	ShortID string    `json:"short_id"`
-	Time    time.Time `json:"time"`
-}
-
-func loadConfig(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("reading config: %w", err)
+func buildDriver(src config.Source) (driver.Driver, error) {
+	switch src.Kind {
+	case "restic":
+		return driver.NewResticDriver(src.Repo, src.PasswordFile), nil
+	default:
+		return nil, fmt.Errorf("unknown source kind %q", src.Kind)
 	}
-
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parsing config: %w", err)
-	}
-	return &cfg, nil
 }
 
-func newestSnapshot(src Source) (*Snapshot, error) {
-	cmd := exec.Command("restic",
-		"-r", src.Repo,
-		"--password-file", src.PasswordFile,
-		"--json",
-		"snapshots",
-	)
+// buildAssertions turns the undecoded assert: entries of a target into
+// assertions. Each entry must be a single-key mapping: the key names a
+// registered assertion, the value is its parameters, left for the factory
+// to decode.
+func buildAssertions(nodes []yaml.Node) ([]assert.Assertion, error) {
+	assertions := make([]assert.Assertion, 0, len(nodes))
 
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("restic snapshots: %w (output: %s)", err, out)
-	}
+	for i := range nodes {
+		n := &nodes[i]
 
-	var snapshots []Snapshot
-	if err := json.Unmarshal(out, &snapshots); err != nil {
-		return nil, fmt.Errorf("parsing restic output: %w", err)
-	}
-
-	if len(snapshots) == 0 {
-		return nil, fmt.Errorf("no snapshots in repository")
-	}
-
-	newest := snapshots[0]
-	for _, s := range snapshots {
-		if s.Time.After(newest.Time) {
-			newest = s
+		if n.Kind != yaml.MappingNode || len(n.Content) != 2 {
+			return nil, fmt.Errorf("assert entry %d at line %d: expected a single-key mapping", i, n.Line)
 		}
+
+		nameNode, paramsNode := n.Content[0], n.Content[1]
+
+		a, err := assert.Build(nameNode.Value, paramsNode)
+		if err != nil {
+			return nil, fmt.Errorf("assert %q at line %d: %w", nameNode.Value, nameNode.Line, err)
+		}
+
+		assertions = append(assertions, a)
 	}
-	return &newest, nil
+
+	return assertions, nil
+}
+
+func runTarget(ctx context.Context, t config.Target) bool {
+	d, err := buildDriver(t.Source)
+	if err != nil {
+		fmt.Printf("ERROR %s: building driver: %v\n", t.Name, err)
+		return false
+	}
+
+	assertions, err := buildAssertions(t.Assert)
+	if err != nil {
+		fmt.Printf("ERROR %s: building assertions: %v\n", t.Name, err)
+		return false
+	}
+
+	env := assert.Env{Driver: d}
+	passed := true
+
+	for _, a := range assertions {
+		res, err := a.Check(ctx, env)
+		if err != nil {
+			fmt.Printf("ERROR %s: %v\n", t.Name, err)
+			passed = false
+			continue
+		}
+
+		status := "PASS "
+		if !res.Passed {
+			status = "FAIL "
+			passed = false
+		}
+		fmt.Printf("%s %s: %s\n", status, t.Name, res.Message)
+	}
+
+	return passed
 }
 
 func main() {
@@ -86,32 +88,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	cfg, err := loadConfig(os.Args[1])
+	cfg, err := config.Load(os.Args[1])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
 
+	ctx := context.Background()
 	failed := false
 
 	for _, t := range cfg.Targets {
-		snap, err := newestSnapshot(t.Source)
-		if err != nil {
-			fmt.Printf("ERROR %s: %v\n", t.Name, err)
+		if !runTarget(ctx, t) {
 			failed = true
-			continue
-		}
-
-		age := time.Since(snap.Time).Round(time.Second)
-		max_age := t.Assert.NewestSnapshotAgeMax
-
-		if age > max_age {
-			fmt.Printf("FAIL  %s: newest snapshot %s is %s old (max %s)\n",
-				t.Name, snap.ShortID, age, max_age)
-			failed = true
-		} else {
-			fmt.Printf("PASS  %s: newest snapshot %s is %s old (max %s)\n",
-				t.Name, snap.ShortID, age, max_age)
 		}
 	}
 
