@@ -28,7 +28,71 @@ catch) and over 6 hours (large restores would work unconfigured, weakening the
 RTO signal). A 500 GB target must set `timeout:` explicitly, which is the
 point: it forces the operator to state their RTO rather than discover it.
 
+### Which timestamp `newest_file_age_max` trusts — mtime, and only mtime
+ctime was never really a candidate once measured. The kernel sets ctime on any
+inode change and no userspace API can write it, so a restore stamps every file
+with the restore's own ctime. Confirmed against restic 0.18.0: a file dated
+2025-01-15 came back dated 2025-01-15 (mtime exact), while its ctime was the
+moment of the restore. atime is preserved too but means nothing here — reading
+a file moves it.
+
+That leaves mtime carrying the whole assertion, which is uncomfortable, because
+the failure is asymmetric. If a backend does *not* preserve mtime, every
+restored file looks brand new, the newest-file age is ~0, and the check passes
+forever — silently, on exactly the failure mode (#1) it exists to catch. A
+verification tool that fails towards PASS is worse than no check.
+
+So two guards, both errors rather than verdicts:
+
+- an mtime ahead of wall-clock now (clock skew), mirroring the call made for
+  `newest_snapshot_age_max` in session 1;
+- an mtime newer than the snapshot it was restored from, beyond a 5-minute
+  tolerance for files still being written while the backup ran.
+
+The second guard costs this file assertion a `Driver.Latest` call, which is why
+it was the author's decision rather than an implementation detail: a file
+assertion now reaches for repository metadata. Accepted because the call is
+cheap by construction (that is what the `Latest`/`Restore` split is for) and
+because without it the headline assertion can be vacuously green.
+
+**Revisit when:** a backend appears whose restore genuinely cannot preserve
+mtime — a `pg_dump` file restored into a container has no per-file mtime worth
+reading, and the object-storage tarball case may be similar. At that point the
+answer is probably a driver-declared capability rather than a per-assertion
+guard, and this section reopens together with the two-implementation extraction
+below.
+
 ## Open questions (deferred, with reasons)
+
+### Assertion paths carry the backup's original absolute path — unresolved
+restic stores absolute paths and reproduces them under the restore target, so a
+snapshot of `/home/user/constat-lab/data` restored into a temp directory lands
+at `<restoredir>/home/user/constat-lab/data`. Every file assertion's `path:`
+must therefore be written as `home/user/constat-lab/data/config.php`, not
+`config.php`.
+
+This is bad on three counts: it is unguessable from the config alone, it
+silently breaks when a machine's layout changes, and a wrong prefix reads as a
+legitimate FAIL rather than as a config error — the exact failure shape the
+`Requires()` decision above was designed to avoid elsewhere. It bit a live
+regression run during session 5: the lab's snapshot recorded a path from before
+the directory was moved, and four assertions failed convincingly for the wrong
+reason.
+
+Three routes, none taken yet:
+
+- `restic restore latest:<path> --target dir` flattens that subtree to the
+  restore root. Verified working on 0.18.0. Cheapest fix, but it is a
+  restic-specific escape hatch and CLAUDE.md forbids restic leaking into core.
+- A `restore.strip_prefix:` or `restore.root:` config field, driver-agnostic
+  but one more thing the operator has to get right.
+- The runner detects the single common prefix of the restored tree and points
+  `Env.RestoreDir` at it. Best config ergonomics, most magic, and ambiguous the
+  moment a snapshot covers two unrelated paths.
+
+**Revisit when:** session 11 writes the install documentation, or earlier if
+session 6's fixture corpus makes the prefix handling painful to express. It is
+a config-schema decision, so it is the author's.
 
 ### Severity on `Result` — deferred
 `Result` carries `Duration` but not `Severity`. Duration is passive: it gets
