@@ -2,7 +2,7 @@
 
 Prove your backups actually restore. constat takes an existing restic
 repository, restores it into a disposable environment, runs assertions
-against the result, and emits a signed, dated report — then alerts if
+against the result, and emits a dated JSON/HTML report — then alerts if
 anything's wrong.
 
 It never stores your backup data. It doesn't replace restic, Borg, or
@@ -10,9 +10,24 @@ It never stores your backup data. It doesn't replace restic, Borg, or
 someone actually checking the restore works, on a schedule, instead of
 finding out during an incident.
 
-Verifies **restic** repositories today. Borg is on the roadmap, not yet
-built — if you saw that claim somewhere else, it was wrong; this is the
-correct one.
+## What's real today, and what isn't
+
+This is v0. Being precise about the boundary matters more than sounding
+finished — a tool whose job is telling you the truth about your backups has
+no business overstating itself.
+
+**Works:** restic repositories, file assertions, Postgres dump verification
+against a real disposable container, JSON and HTML reports, webhook alerting.
+
+**Not built yet:**
+
+- **Report signing.** The report format and canonical serialisation are
+  designed for it and the seam is in place, but no signature is produced
+  today. Reports are unsigned JSON — fine as an operational check, not yet
+  the tamper-evident evidence artifact the design is aiming at.
+- **Borg.** restic is the only `source.kind`. If you saw a Borg claim
+  elsewhere, it was wrong; this is the correct statement.
+- **MySQL and other databases.** Postgres only.
 
 ## Five minutes to a first verification
 
