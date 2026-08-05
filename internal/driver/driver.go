@@ -34,10 +34,33 @@ func NewResticDriver(repo, passwordFile string) *ResticDriver {
 	return &ResticDriver{Repo: repo, PasswordFile: passwordFile}
 }
 
+// noCache is passed to every restic invocation, and it is a correctness
+// requirement rather than a tuning knob.
+//
+// restic caches tree and index packs locally. With a warm cache, a repository
+// whose tree pack has been truncated still restores cleanly and reports
+// success, because the trees are read from ~/.cache/restic and the damaged pack
+// is never touched. Measured, not assumed: it is what the truncated-repo
+// fixture found, and the tool said PASS. Data packs are not cached, so
+// corruption there is caught either way — but half the corruption being
+// invisible is not a usable guarantee.
+//
+// constat is documented as running on the customer's own machine, which is
+// usually the machine that took the backup, so the cache is warm exactly where
+// it does the most damage. Verifying the cache instead of the repository would
+// make failure mode #4 invisible, and #4 is one of the modes this tool exists
+// for.
+//
+// The cost is re-reading the index on every invocation, which is real for a
+// large remote repository. That is the right trade: a verification that might
+// be reading a cache is not a verification.
+const noCache = "--no-cache"
+
 func (d *ResticDriver) Latest(ctx context.Context) (*Snapshot, error) {
 	cmd := exec.CommandContext(ctx, "restic",
 		"-r", d.Repo,
 		"--password-file", d.PasswordFile,
+		noCache,
 		"--json",
 		"snapshots",
 	)
@@ -72,6 +95,7 @@ func (d *ResticDriver) Restore(ctx context.Context, dest string, paths []string)
 	args := []string{
 		"-r", d.Repo,
 		"--password-file", d.PasswordFile,
+		noCache,
 		"restore", "latest",
 		"--target", dest,
 	}

@@ -262,3 +262,63 @@ func TestEndToEnd_UnreadableRepositoryErrorsWithOutput(t *testing.T) {
 		t.Errorf("expected restic's own output to be carried into the error, got:\n%s", out)
 	}
 }
+
+// A warm restic cache must not be able to hide corruption in the repository.
+//
+// restic caches tree and index packs locally, so a restore can be served from
+// ~/.cache/restic without ever reading the damaged pack. constat is documented
+// as running on the customer's own machine, which is usually the machine that
+// took the backup, so the cache is warm exactly where it does the most damage:
+// a repository with a truncated tree pack restores cleanly and the tool reports
+// success.
+//
+// RESTIC_CACHE_DIR points both the backup and constat's own restic at the same
+// cache, which reproduces that deployment without touching the developer's real
+// cache.
+func TestEndToEnd_WarmCacheDoesNotMaskCorruption(t *testing.T) {
+	requireRestic(t)
+	t.Setenv("RESTIC_CACHE_DIR", t.TempDir())
+
+	repo, passwordFile, backupPath := buildLabRepo(t)
+
+	// The largest pack is the tree pack, and it is the one restic caches.
+	// Truncating it is what a warm cache can hide; a truncated data pack is
+	// caught either way, so it would not pin this behaviour.
+	packs, err := filepath.Glob(filepath.Join(repo, "data", "*", "*"))
+	if err != nil || len(packs) == 0 {
+		t.Fatalf("no pack files found in %s (err %v)", repo, err)
+	}
+	treePack, largest := "", int64(-1)
+	for _, p := range packs {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("stat %s: %v", p, err)
+		}
+		if fi.Size() > largest {
+			treePack, largest = p, fi.Size()
+		}
+	}
+	// restic writes packs read-only.
+	if err := os.Chmod(treePack, 0o644); err != nil {
+		t.Fatalf("making pack writable: %v", err)
+	}
+	if err := os.Truncate(treePack, 40); err != nil {
+		t.Fatalf("truncating pack: %v", err)
+	}
+	if err := os.Chmod(treePack, 0o444); err != nil {
+		t.Fatalf("restoring pack mode: %v", err)
+	}
+
+	tgt := labTarget(t, repo, passwordFile, backupPath, "- path_exists: config.php\n")
+
+	var passed bool
+	out := captureStdout(t, func() { passed = Target(context.Background(), tgt) })
+	t.Logf("output:\n%s", out)
+
+	if passed {
+		t.Errorf("a truncated tree pack was reported as a healthy restore:\n%s", out)
+	}
+	if !strings.Contains(out, "ERROR") {
+		t.Errorf("expected the restore to error, got:\n%s", out)
+	}
+}
