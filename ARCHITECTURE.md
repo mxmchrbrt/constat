@@ -524,3 +524,65 @@ above. So `Env` needed to carry a driver, which meant `Driver` needed to
 exist. Still only one implementation (restic) behind it — the two-backend
 generalisation this section calls for is still owed, just delayed to the
 first day a Borg target shows up rather than paid today.
+
+### Signing: ed25519, stdlib only, and a permission check with teeth
+Implemented in session 12 after the author waived `CLAUDE.md`'s signing-key
+carve-out for this one piece (the waiver, and its cost, are recorded there).
+
+**Ed25519, `crypto/ed25519` only.** No third-party crypto: a dependency in the
+signing path is a dependency that can change what a signature means. PKCS#8 PEM
+for the private key, PKIX PEM for the public half — both stdlib, both readable
+by `openssl` without constat present, which is the point.
+
+**The key ID is SHA-256 over the *public* key's DER.** It is published in every
+report constat writes, so it must be derived from public material alone.
+
+**A group- or world-readable private key is refused, not warned about.** A key
+the whole host can read makes every signature it produces meaningless — the
+signature no longer says *who*. A warning printed at 3am into a log nobody
+reads is not a control; refusing to run is.
+
+**A configured-but-unusable key is fatal, not a fallback to unsigned.** An
+operator who asked for evidence and silently received an unsigned report would
+not discover it until someone tried to verify — which is exactly when it is too
+late to re-run. The key is therefore loaded *before* any restore work begins,
+so the failure comes in the first second rather than after an hour of restores
+with nothing to re-sign from.
+
+**`keygen` refuses to overwrite.** Losing a private key makes every report ever
+signed with it permanently unverifiable, and a keygen that clobbers on a re-run
+is one mistyped path away from doing that.
+
+Verified against an independent implementation, not just its own tests:
+`openssl pkeyutl -verify` accepts a real signed report and rejects one with a
+single flipped verdict. `docs/verifying-reports.md` is written as a
+specification so a third party can do the same.
+
+**Revisit when:** key rotation is needed. `algorithm` and `key_id` are recorded
+per signature precisely so a second key or scheme can arrive without making old
+reports ambiguous — but there is no rotation tooling and no key history, and
+that is a real gap for anyone retaining reports as long-term evidence.
+
+### Container startup retries a lost port race, and nothing else
+The published port is kernel-assigned, and another process can take it between
+the kernel choosing it and the runtime binding it — observed once as rootless
+podman's `pasta failed ... Failed to bind port N`.
+
+`Start` makes up to three attempts, each a *completely fresh* container: new
+name, new scratch directory, new port. The failed attempt is torn down before
+the next begins, so a retry never inherits state — which is what keeps session
+7's mutation-tested teardown guarantee intact.
+
+Retrying is worth it because the alternative is a spurious ERROR on a backup
+that is fine. constat classifies that correctly (the tool could not run, not
+the backup is broken), but an operator woken by it still has to work that out,
+and alert fatigue is how real failures come to be ignored.
+
+The classification is deliberately **narrow**: only port-binding messages are
+retried. Matching broadly would turn a missing image or a dead daemon — fast,
+clear failures — into slow ones. It matches on message text because shelling
+out to a CLI leaves no error code to read, which is the honest cost of that
+decision.
+
+Three attempts, not more: a collision that survives three fresh ports is not a
+collision, it is something that will not fix itself by waiting.
