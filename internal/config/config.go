@@ -11,6 +11,13 @@ import (
 
 type Config struct {
 	Targets []Target `yaml:"targets"`
+
+	// Webhook, when set, is posted the run's report on completion — pass and
+	// fail both, so an operator watching a dashboard sees the check ran at
+	// all, not only that it once failed. Top-level rather than per-target: a
+	// signed report is one run's outcome, and alerting is about that run, not
+	// about any single target inside it.
+	Webhook *Webhook `yaml:"webhook"`
 }
 
 type Target struct {
@@ -41,6 +48,23 @@ func (t Target) EffectiveTimeout() time.Duration {
 		return DefaultTimeout
 	}
 	return t.Timeout
+}
+
+// Webhook mirrors internal/webhook.Config in YAML. Duplicated rather than
+// imported: config stays dependency-free (schema only), which is the same
+// reason internal/run.buildDriver, not config, validates source.kind.
+type Webhook struct {
+	URL string `yaml:"url"`
+
+	// Format selects the payload shape: generic (default), ntfy, healthchecks,
+	// or discord. Left unvalidated here, same as source.kind: config has no
+	// dependency on internal/webhook, so it cannot know which formats exist.
+	// An unrecognised format is caught where the webhook is actually sent
+	// (cmd/constat/main.go), the same place unknown source kinds are caught.
+	Format string `yaml:"format"`
+
+	Timeout     time.Duration `yaml:"timeout"`
+	MaxAttempts int           `yaml:"max_attempts"`
 }
 
 type Source struct {
@@ -181,6 +205,18 @@ func validate(cfg *Config, root *yaml.Node) error {
 			if _, err := safepath.ValidateRelPath(v.Load); err != nil {
 				return fmt.Errorf("%s: verify_with.load: %w", loc, err)
 			}
+		}
+	}
+
+	if w := cfg.Webhook; w != nil {
+		if w.URL == "" {
+			return fmt.Errorf("webhook.url is required")
+		}
+		if w.Timeout < 0 {
+			return fmt.Errorf("webhook.timeout must be positive, got %s", w.Timeout)
+		}
+		if w.MaxAttempts < 0 {
+			return fmt.Errorf("webhook.max_attempts must not be negative, got %d", w.MaxAttempts)
 		}
 	}
 

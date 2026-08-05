@@ -345,3 +345,77 @@ targets:
 		})
 	}
 }
+
+func TestLoad_Webhook(t *testing.T) {
+	withWebhook := func(block string) string {
+		return validYAML + block
+	}
+
+	tests := []struct {
+		name    string
+		block   string
+		wantErr string
+	}{
+		{name: "no webhook block is fine", block: ""},
+		{
+			name:  "url only",
+			block: "webhook:\n  url: https://ntfy.sh/mytopic\n",
+		},
+		{
+			name:  "full block",
+			block: "webhook:\n  url: https://ntfy.sh/mytopic\n  format: ntfy\n  timeout: 5s\n  max_attempts: 5\n",
+		},
+		{
+			name:    "missing url",
+			block:   "webhook:\n  format: ntfy\n",
+			wantErr: "webhook.url is required",
+		},
+		{
+			name:    "negative timeout",
+			block:   "webhook:\n  url: https://ntfy.sh/mytopic\n  timeout: -1s\n",
+			wantErr: "webhook.timeout must be positive",
+		},
+		{
+			name:    "negative max_attempts",
+			block:   "webhook:\n  url: https://ntfy.sh/mytopic\n  max_attempts: -1\n",
+			wantErr: "webhook.max_attempts must not be negative",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := load(t, withWebhook(tt.block))
+
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected an error containing %q, got none", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("error %q does not contain %q", err, tt.wantErr)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.block == "" && cfg.Webhook != nil {
+				t.Error("no webhook block must decode to nil, so no webhook is ever sent")
+			}
+		})
+	}
+}
+
+// An unrecognised format is deliberately not rejected at config load — see the
+// comment on Webhook.Format. This pins that it is at least preserved through
+// decoding rather than silently dropped, so the caller that does validate it
+// (cmd/constat/main.go) has something to check.
+func TestLoad_Webhook_UnknownFormatPreservedNotRejected(t *testing.T) {
+	cfg, err := load(t, validYAML+"webhook:\n  url: https://example.test/hook\n  format: carrier-pigeon\n")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Webhook.Format != "carrier-pigeon" {
+		t.Errorf("Format = %q, want it preserved verbatim", cfg.Webhook.Format)
+	}
+}
