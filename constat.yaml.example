@@ -1,0 +1,117 @@
+# constat.yaml — example covering both verification paths this v0 supports:
+# files (restic restore + file assertions) and a database (restic restore +
+# a disposable Postgres container + query assertions).
+#
+# Every key here is real and matches internal/config.Config exactly — this is
+# not aspirational. Anything not shown (restore.paths, per-target timeout,
+# assertion params beyond the common cases) is documented at the field level
+# in internal/config/config.go and ARCHITECTURE.md; nothing here is a promise
+# of a feature that doesn't exist yet.
+#
+# Validate a config without running anything destructive:
+#   constat -report - your-config.yaml   # writes the report to stdout too
+
+targets:
+  # --- file path -------------------------------------------------------
+  - name: nextcloud-files
+    source:
+      kind: restic
+      repo: s3:s3.eu-west-3.amazonaws.com/mybucket/nextcloud
+      password_file: /etc/constat/nextcloud.pass
+
+    restore:
+      # Only restore this subtree, not the whole repository — restic
+      # --include semantics (a prefix match against paths inside the
+      # snapshot).
+      paths: ["/var/lib/nextcloud/data"]
+
+      # Backups store absolute paths, and a restore reproduces them
+      # verbatim beneath the restore directory: a snapshot of
+      # /var/lib/nextcloud/data lands at <restoredir>/var/lib/nextcloud/data.
+      # strip_prefix sets what assertion paths below are written relative
+      # to, so `path_exists: config.php` works instead of repeating the
+      # whole original path in every assertion.
+      #
+      # This must match the path the *snapshot* actually recorded — run
+      # `restic -r <repo> --password-file <passfile> snapshots --json` and
+      # read it from "paths" if you're not sure. A wrong value here is
+      # reported as a clear ERROR naming that command, never as a
+      # misleading FAIL.
+      strip_prefix: /var/lib/nextcloud/data
+
+    # Bounds the whole target: the restore, plus every assertion below.
+    # Defaults to 1h if unset. A target expected to take longer must set
+    # this explicitly — that's deliberate: it forces you to state your RTO
+    # rather than discover it the day a restore actually takes 6 hours.
+    timeout: 30m
+
+    assert:
+      # Failure mode #1 (silent non-execution) on the snapshot side: the
+      # backup job stopped running, and nothing else would notice.
+      - newest_snapshot_age_max: 24h
+
+      # Failure mode #1 on the file side: the job still runs and the
+      # snapshot is fresh, but nothing new has actually been captured in
+      # weeks. This is the headline check — a fresh snapshot full of stale
+      # data is invisible to newest_snapshot_age_max above.
+      - newest_file_age_max:
+          max_age: 24h
+
+      # Failure mode #7 (restores but won't boot): the config file itself
+      # must be present, or the application has nothing to start from.
+      - path_exists: config.php
+
+      # Failure mode #2 (coverage drift): a directory that should hold
+      # thousands of files holding far fewer means something stopped being
+      # included in the backup.
+      - file_count_min:
+          min: 1000
+          path: data
+
+  # --- database path -----------------------------------------------------
+  - name: app-db
+    source:
+      kind: restic
+      repo: /srv/backups/app-db
+      password_file: /etc/constat/app-db.pass
+
+    restore:
+      strip_prefix: /var/backups/app-db
+
+    verify_with:
+      # The dump is loaded into a real, disposable Postgres of this exact
+      # version — not a mock, not a checksum. taxonomy #9 (version
+      # mismatch, e.g. a 16 dump into a 15 image) is caught here as a clear
+      # FAIL before psql ever sees the file, rather than as a wall of
+      # confusing syntax errors.
+      image: postgres:16-alpine
+      # Relative to the assertion root (restore.strip_prefix above), same
+      # rule as every assertion path.
+      load: dump.sql
+
+    timeout: 20m
+
+    assert:
+      - newest_snapshot_age_max: 24h
+
+      # Failure mode #2 / #6: the dump loads fine and a table that should
+      # have rows does not — pruned by the wrong retention rule, or a dump
+      # taken with the wrong --table flags.
+      - query_min:
+          query: SELECT count(*) FROM users
+          min: 1
+
+      # Failure mode #1 inside the database: nothing else can see this.
+      # The job runs nightly, the dump loads without complaint, and the
+      # newest row in it is from three months ago.
+      - query_newer_than:
+          query: SELECT max(created_at) FROM orders
+          newer_than: 24h
+
+# Fires on pass and on fail — an alert that only fires on failure can't tell
+# "healthy" from "stopped running weeks ago", which is exactly failure mode
+# #1. `format` is one of generic (default, full JSON report), ntfy,
+# healthchecks, discord.
+webhook:
+  url: https://ntfy.sh/my-constat-alerts
+  format: ntfy
