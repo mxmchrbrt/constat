@@ -102,6 +102,36 @@ point the assertion root outside the restore directory. That shared use is why
 at all — a `pg_dump` loaded into a container is the obvious one. The field
 should then be documented as file-path-driver-only rather than quietly ignored.
 
+### Every restic invocation passes `--no-cache`
+restic caches tree and index packs in `~/.cache/restic`. With a warm cache a
+repository whose tree pack has been truncated restores cleanly and reports
+success: the trees never come off disk and the damaged pack is never read. Data
+packs are not cached, so corruption there is caught either way — but half of
+failure mode #4 being invisible is not a guarantee anyone can rely on.
+
+This is not hypothetical and was not reasoned out in advance. The
+`truncated-repo` fixture was written expecting an ERROR, and the tool said PASS.
+
+The deployment makes it worse rather than better: constat runs on the customer's
+own machine, which is usually the machine that took the backup, so the cache is
+warm exactly where it does the most damage.
+
+The cost is re-reading the index on every invocation, which is real for a large
+remote repository and pushes against failure mode #10 (RTO). Accepted: a
+verification that might be reading a cache is not a verification. A scratch
+`--cache-dir` per run was the alternative — cold every run, but with reuse
+within a run — and was not taken because it adds a lifecycle to clean up for a
+benefit that is currently one extra index read.
+
+The general point is larger than the flag. Shelling out to the customer's own
+tool is not neutral: restic's defaults are tuned for backing up quickly, and
+verification wants the opposite of several of them. `--no-cache` is unlikely to
+be the last one.
+
+**Revisit when:** a remote-repository user reports the index read dominating
+their run, or a second flag joins it — at which point this stops being one
+constant and becomes a deliberate "verification profile" for the driver.
+
 ## Open questions (deferred, with reasons)
 
 ### Severity on `Result` — deferred
