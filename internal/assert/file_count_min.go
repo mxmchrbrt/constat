@@ -77,6 +77,11 @@ func (a *fileCountMin) Check(ctx context.Context, env Env) (Result, error) {
 		if err != nil {
 			return err
 		}
+		// A restore can be large enough that the walk itself outlives the
+		// target timeout. Failure mode #10 is about time.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if d.IsDir() {
 			return nil
 		}

@@ -109,6 +109,21 @@ func TestFileCountMin_SymlinkNeverCounted(t *testing.T) {
 	}
 }
 
+func TestFileCountMin_ContextCancellationStopsTheWalk(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 50; i++ {
+		mustWriteFile(t, filepath.Join(root, "f", string(rune('a'+i%26)), "x.txt"), "x")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	a := &fileCountMin{min: 1, path: "."}
+	if _, err := a.Check(ctx, Env{RestoreDir: root}); err == nil {
+		t.Error("expected a cancelled context to abort the walk, got no error")
+	}
+}
+
 func TestFileCountMin_Requires(t *testing.T) {
 	a := &fileCountMin{}
 	if !a.Requires().Restore {
