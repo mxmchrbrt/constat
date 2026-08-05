@@ -1,0 +1,49 @@
+version: 2
+
+project_name: constat
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: constat
+    main: ./cmd/constat
+    binary: constat
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    # arm64 matters for the homelab audience — Raspberry Pi and other ARM
+    # boxes are common places to run a backup verification job.
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - id: constat
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE
+      - README.md
+      - constat.yaml.example
+      - examples/systemd/*
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^test:"
+      - "^docs:"
+
+release:
+  # Draft so a release is reviewed before it goes live rather than
+  # publishing automatically the moment a tag is pushed.
+  draft: true

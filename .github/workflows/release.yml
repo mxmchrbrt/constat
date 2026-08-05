@@ -1,0 +1,35 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # goreleaser needs full history for the changelog
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # -short: a release must be fast and must not depend on a container
+      # runtime + image pull succeeding on the runner. The full suite,
+      # including the container and fixture-corpus tests, already runs on
+      # every push via ci.yml; a tag is pushed from a commit that already
+      # passed it.
+      - name: test
+        run: go test ./... -race -short
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> 2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
