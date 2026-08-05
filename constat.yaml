@@ -1,0 +1,8 @@
+targets:
+  - name: lab-files
+    source:
+      kind: restic
+      repo: /home/user/claude-workspace/constat-lab/repo
+      password_file: /home/user/claude-workspace/constat-lab/pass
+    assert:
+      newest_snapshot_age_max: 48h

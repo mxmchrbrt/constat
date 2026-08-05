@@ -1,0 +1,1 @@
+For assert, I decided to use duration instead of severity because I want a report which is quick and need no interpretation. Plus, we don't have much asserts for now, in the future, it could be interesting to add if there were more asserts so that people can directly tell if their backup is wrong or not.
