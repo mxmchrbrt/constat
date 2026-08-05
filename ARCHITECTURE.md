@@ -372,6 +372,52 @@ the same shape of trade-off (fast and slightly less thorough vs. slow and
 fully thorough) and should probably be resolved together rather than
 separately.
 
+### Subprocess output is bounded before it reaches an error
+Both `internal/driver` and `internal/container` cap how much of a subprocess's
+output they interpolate into an error, at 2000 characters with a visible
+truncation marker.
+
+This is a correctness bound, not tidiness, and the reasoning is worth keeping
+because the naive version looks harmless. Those errors do not stay local: an
+error becomes a `report.Assertion` message, which is written verbatim into
+`report.json` and posted as the webhook body. restic emits roughly one line per
+affected file on a failed restore — measured at ~276 KB for a repository of
+only 400 files.
+
+Unbounded, the failure compounds in the worst available direction: the more
+broken the backup, the larger the payload, until the webhook carrying the alert
+is rejected for being oversized. The alert fails exactly when it matters.
+
+The two implementations are deliberately separate small copies rather than a
+shared package — each is a handful of lines with no logic to get wrong, and
+neither package otherwise depends on the other. This is the opposite call from
+`safepath`, which *was* extracted, and the difference is that safepath is a
+security guard where divergence is silent and dangerous, while a truncation
+cap that drifts by a few hundred characters is merely untidy.
+
+**Revisit when:** a third caller appears. That is the point where copies stop
+being cheaper than a package.
+
+### The secret-leak story has one link constat does not own
+Every path where a secret could reach durable output was enumerated in session
+12. The repository passphrase is never read by constat at all — it is handed to
+restic as a path. The generated container credential is redacted by `redactDSN`
+in the errors `internal/container` wraps, and the webhook URL by `redactURL`.
+
+The link constat does not own: errors raised from inside `internal/assert` —
+a query failing because the container died mid-run — have no password in scope
+to redact against, and depend on **pgx redacting its own connection string**.
+It does, verified empirically rather than assumed: pgx reports ``failed to
+connect to `user=constat database=constat` `` with no password in it.
+
+That is an external guarantee, so it is pinned by a test
+(`TestPgxConnectionErrorsDoNotCarryThePassword`). A pgx upgrade that changed
+the behaviour would otherwise leak into a signed report and be discovered by
+whoever read it.
+
+**Revisit when:** a second database engine arrives with a different driver —
+the same question has to be asked of it, and the answer will not be inherited.
+
 ## Open questions (deferred, with reasons)
 
 ### What the report deliberately does not record
