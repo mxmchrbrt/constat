@@ -1,0 +1,19 @@
+# Runs constat.service once a day at 03:00, with jitter so a fleet of hosts
+# on the same config doesn't hammer the same S3 bucket or webhook endpoint at
+# the same second.
+#
+# A nightly drill is a starting point, not a rule: a target with a real RTO
+# requirement should probably run more often, and the interval here has
+# nothing to do with the per-target `timeout:` in constat.yaml, which bounds
+# a single run, not how often it happens.
+
+[Unit]
+Description=Run constat backup verification daily
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=1800
+Persistent=true
+
+[Install]
+WantedBy=timers.target

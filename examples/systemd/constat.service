@@ -1,0 +1,51 @@
+# Example unit for a single constat run. Install alongside constat.timer,
+# which is what actually schedules it — this ships a scheduler *example*, not
+# a scheduler, per the project's own scope decision.
+#
+# Install:
+#   sudo cp constat.service constat.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now constat.timer
+#
+# Run once by hand, without waiting for the timer:
+#   sudo systemctl start constat.service
+#   journalctl -u constat.service
+#
+# Adjust ExecStart, User, and the config path for your setup before enabling.
+
+[Unit]
+Description=constat backup verification
+# Don't fight the network or the container runtime for startup order; a
+# restore that starts before either is ready fails cleanly and is retried at
+# the next timer tick, which is simpler than getting unit ordering exactly
+# right for every possible restic backend (local disk, S3, SFTP, ...).
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# Least privilege that can still read the repository and the password file.
+# Runs as its own service account rather than root — constat itself needs no
+# elevated privileges, only read access to what it verifies. If any target
+# uses verify_with, this user also needs docker-group membership (or a
+# rootless podman setup) to reach the container runtime.
+User=constat
+Group=constat
+
+ExecStart=/usr/local/bin/constat \
+    -report /var/lib/constat/report.json \
+    -html /var/lib/constat/report.html \
+    /etc/constat/constat.yaml
+
+# A hung restic or a hung container must not be able to wedge the timer
+# forever — belt-and-braces alongside the per-target `timeout:` in the config
+# itself, which is what actually bounds each restore.
+TimeoutStartSec=2h
+
+# constat writes into a scratch directory under /tmp and into the paths given
+# to -report/-html; nothing else needs to be writable.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/constat /tmp
+PrivateTmp=yes
+NoNewPrivileges=yes
