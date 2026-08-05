@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/mxmchrbrt/constat/internal/safepath"
 	"gopkg.in/yaml.v3"
 )
 
@@ -43,12 +44,22 @@ type Source struct {
 	PasswordFile string `yaml:"password_file"`
 }
 
-// Restore.Paths filters what comes out of the repository (restic --include
-// semantics: prefix match against paths inside the snapshot). Schema only for
-// now — session 3 wires it into driver.Driver.Restore; until then it is
-// accepted but unused, not silently ignored.
 type Restore struct {
+	// Paths filters what comes out of the repository (restic --include
+	// semantics: prefix match against paths inside the snapshot).
 	Paths []string `yaml:"paths"`
+
+	// StripPrefix is the directory, as recorded in the backup, that assertion
+	// paths should be written relative to. Backups store absolute paths and a
+	// restore reproduces them, so a snapshot of /home/app/data lands at
+	// <restoredir>/home/app/data and every assertion would otherwise have to
+	// repeat that prefix. Set it once here and write `path_exists: config.php`.
+	//
+	// Deliberately not inferred from the snapshot: a snapshot can cover two
+	// unrelated paths, and guessing wrong would move the root of every
+	// assertion silently. A prefix that is not in the restored tree is an
+	// error, not a failed verification.
+	StripPrefix string `yaml:"strip_prefix"`
 }
 
 func Load(path string) (*Config, error) {
@@ -130,6 +141,11 @@ func validate(cfg *Config, root *yaml.Node) error {
 		}
 		if t.Timeout < 0 {
 			return fmt.Errorf("%s: timeout must be positive, got %s", loc, t.Timeout)
+		}
+		if t.Restore.StripPrefix != "" {
+			if _, err := safepath.RelFromBackupPath(t.Restore.StripPrefix); err != nil {
+				return fmt.Errorf("%s: restore.strip_prefix: %w", loc, err)
+			}
 		}
 	}
 

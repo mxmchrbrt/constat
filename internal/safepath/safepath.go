@@ -34,6 +34,20 @@ func ValidateRelPath(raw string) (string, error) {
 	return clean, nil
 }
 
+// RelFromBackupPath converts a path as it was recorded in the backup — almost
+// always absolute, since that is what backup tools store — into a path relative
+// to a restore root. Restoring reproduces the original tree beneath the restore
+// directory, so a snapshot of /home/app/data lands at <restoredir>/home/app/data
+// and "/home/app/data" has to become "home/app/data" before anything can look
+// for it.
+func RelFromBackupPath(raw string) (string, error) {
+	trimmed := strings.TrimLeft(filepath.Clean(raw), string(filepath.Separator))
+	if trimmed == "" || trimmed == "." {
+		return "", fmt.Errorf("path %q names the whole filesystem root, not a directory inside the backup", raw)
+	}
+	return ValidateRelPath(trimmed)
+}
+
 // ResolveInRoot resolves rel (already validated by ValidateRelPath) against
 // root, following symlinks, and reports whether the final target exists and
 // stays inside root. A missing path and a path that escapes root via a

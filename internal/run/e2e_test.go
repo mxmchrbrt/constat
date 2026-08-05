@@ -38,16 +38,11 @@ func requireRestic(t *testing.T) {
 	}
 }
 
-// restoreLab builds a restic repository from a small tree and returns the
-// repository path, the password file, and the path the restored tree will
-// appear under inside a restore directory.
-//
-// That last value is the awkward one: restic stores absolute paths, so
-// restoring into an empty directory reproduces the whole original path beneath
-// it. A restore of /home/app/data lands at <restoredir>/home/app/data, and
-// assertion paths have to be written against that. Recorded as a finding in
-// PLAN.md session 5 rather than papered over here.
-func buildLabRepo(t *testing.T) (repo, passwordFile, restoredPrefix string) {
+// buildLabRepo builds a restic repository from a small tree and returns the
+// repository path, the password file, and the absolute path the backup
+// recorded — which is what a target's restore.strip_prefix has to be set to,
+// since restoring reproduces that whole path beneath the restore directory.
+func buildLabRepo(t *testing.T) (repo, passwordFile, backupPath string) {
 	t.Helper()
 
 	base := t.TempDir()
@@ -91,13 +86,13 @@ func buildLabRepo(t *testing.T) (repo, passwordFile, restoredPrefix string) {
 	restic("init")
 	restic("backup", data)
 
-	// restic records the path it was given after symlink resolution, and the
-	// restored tree mirrors it minus the leading separator.
+	// restic records the path it was given after symlink resolution, so that
+	// is what strip_prefix must match.
 	realData, err := filepath.EvalSymlinks(data)
 	if err != nil {
 		t.Fatalf("resolving data path: %v", err)
 	}
-	return repo, passwordFile, strings.TrimPrefix(realData, string(filepath.Separator))
+	return repo, passwordFile, realData
 }
 
 // captureStdout runs fn with os.Stdout redirected and returns what it printed.
@@ -129,7 +124,7 @@ func captureStdout(t *testing.T, fn func()) string {
 	return out
 }
 
-func labTarget(t *testing.T, repo, passwordFile, assertYAML string) config.Target {
+func labTarget(t *testing.T, repo, passwordFile, backupPath, assertYAML string) config.Target {
 	t.Helper()
 	var nodes []yaml.Node
 	if err := yaml.Unmarshal([]byte(assertYAML), &nodes); err != nil {
@@ -138,6 +133,7 @@ func labTarget(t *testing.T, repo, passwordFile, assertYAML string) config.Targe
 	return config.Target{
 		Name:    "lab-files",
 		Source:  config.Source{Kind: "restic", Repo: repo, PasswordFile: passwordFile},
+		Restore: config.Restore{StripPrefix: backupPath},
 		Assert:  nodes,
 		Timeout: 2 * time.Minute,
 	}
@@ -145,13 +141,13 @@ func labTarget(t *testing.T, repo, passwordFile, assertYAML string) config.Targe
 
 func TestEndToEnd_HealthyRepositoryPasses(t *testing.T) {
 	requireRestic(t)
-	repo, passwordFile, prefix := buildLabRepo(t)
+	repo, passwordFile, backupPath := buildLabRepo(t)
 
-	tgt := labTarget(t, repo, passwordFile, ""+
+	tgt := labTarget(t, repo, passwordFile, backupPath, ""+
 		"- newest_snapshot_age_max: 24h\n"+
-		"- path_exists: "+prefix+"/config.php\n"+
-		"- file_count_min:\n    min: 3\n    path: "+prefix+"/files\n"+
-		"- newest_file_age_max:\n    max_age: 24h\n    path: "+prefix+"\n")
+		"- path_exists: config.php\n"+
+		"- file_count_min:\n    min: 3\n    path: files\n"+
+		"- newest_file_age_max:\n    max_age: 24h\n")
 
 	var passed bool
 	out := captureStdout(t, func() { passed = Target(context.Background(), tgt) })
@@ -185,11 +181,11 @@ func TestEndToEnd_HealthyRepositoryPasses(t *testing.T) {
 // threshold and the target must still fail.
 func TestEndToEnd_StaleContentsFailWhileSnapshotPasses(t *testing.T) {
 	requireRestic(t)
-	repo, passwordFile, prefix := buildLabRepo(t)
+	repo, passwordFile, backupPath := buildLabRepo(t)
 
-	tgt := labTarget(t, repo, passwordFile, ""+
+	tgt := labTarget(t, repo, passwordFile, backupPath, ""+
 		"- newest_snapshot_age_max: 24h\n"+
-		"- newest_file_age_max:\n    max_age: 10m\n    path: "+prefix+"\n")
+		"- newest_file_age_max:\n    max_age: 10m\n")
 
 	var passed bool
 	out := captureStdout(t, func() { passed = Target(context.Background(), tgt) })
@@ -210,10 +206,10 @@ func TestEndToEnd_StaleContentsFailWhileSnapshotPasses(t *testing.T) {
 // crash or a quiet pass.
 func TestEndToEnd_MissingPathFails(t *testing.T) {
 	requireRestic(t)
-	repo, passwordFile, prefix := buildLabRepo(t)
+	repo, passwordFile, backupPath := buildLabRepo(t)
 
-	tgt := labTarget(t, repo, passwordFile,
-		"- path_exists: "+prefix+"/does-not-exist.php\n")
+	tgt := labTarget(t, repo, passwordFile, backupPath,
+		"- path_exists: does-not-exist.php\n")
 
 	var passed bool
 	out := captureStdout(t, func() { passed = Target(context.Background(), tgt) })
@@ -231,11 +227,11 @@ func TestEndToEnd_MissingPathFails(t *testing.T) {
 // actually shells out to restic with a real passphrase.
 func TestEndToEnd_PassphraseNeverReachesStdout(t *testing.T) {
 	requireRestic(t)
-	repo, passwordFile, prefix := buildLabRepo(t)
+	repo, passwordFile, backupPath := buildLabRepo(t)
 
-	tgt := labTarget(t, repo, passwordFile, ""+
-		"- path_exists: "+prefix+"/config.php\n"+
-		"- path_exists: "+prefix+"/does-not-exist.php\n")
+	tgt := labTarget(t, repo, passwordFile, backupPath, ""+
+		"- path_exists: config.php\n"+
+		"- path_exists: does-not-exist.php\n")
 
 	out := captureStdout(t, func() { Target(context.Background(), tgt) })
 
@@ -248,9 +244,9 @@ func TestEndToEnd_PassphraseNeverReachesStdout(t *testing.T) {
 // subprocess output carried into the error rather than a bare exit status.
 func TestEndToEnd_UnreadableRepositoryErrorsWithOutput(t *testing.T) {
 	requireRestic(t)
-	_, passwordFile, _ := buildLabRepo(t)
+	_, passwordFile, backupPath := buildLabRepo(t)
 
-	tgt := labTarget(t, filepath.Join(t.TempDir(), "no-such-repo"), passwordFile,
+	tgt := labTarget(t, filepath.Join(t.TempDir(), "no-such-repo"), passwordFile, backupPath,
 		"- newest_snapshot_age_max: 24h\n")
 
 	var passed bool

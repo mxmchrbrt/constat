@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mxmchrbrt/constat/internal/safepath"
 )
 
 const validYAML = `
@@ -190,5 +192,78 @@ targets:
 	}
 	if !strings.Contains(err.Error(), "line") {
 		t.Errorf("error = %q, want it to cite a line number", err.Error())
+	}
+}
+
+func TestLoad_StripPrefix(t *testing.T) {
+	withPrefix := func(prefix string) string {
+		return `
+targets:
+  - name: lab-files
+    source:
+      kind: restic
+      repo: /repo
+      password_file: /pass
+    restore:
+      strip_prefix: ` + prefix + `
+    assert:
+      - path_exists: config.php
+`
+	}
+
+	tests := []struct {
+		name    string
+		prefix  string
+		want    string // expected normalised form, when valid
+		wantErr string
+	}{
+		{name: "absolute backup path", prefix: "/home/app/data", want: "home/app/data"},
+		{name: "trailing separator tolerated", prefix: `"/home/app/data/"`, want: "home/app/data"},
+		{name: "already relative", prefix: "home/app/data", want: "home/app/data"},
+		{name: "filesystem root rejected", prefix: `"/"`, wantErr: "whole filesystem root"},
+		{name: "relative traversal rejected", prefix: "../../etc", wantErr: "escapes the restore root"},
+		{
+			// An absolute prefix cannot escape: Clean resolves ".." against
+			// the root before the leading separator is trimmed, so this is
+			// /etc and therefore "etc" inside the restored tree.
+			name:   "traversal inside an absolute prefix is resolved, not rejected",
+			prefix: "/home/../../etc", want: "etc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := load(t, withPrefix(tt.prefix))
+
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected an error containing %q, got none", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("error %q does not contain %q", err, tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), "line") {
+					t.Errorf("error %q does not cite a line number", err)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			// The raw value is what round-trips; normalisation happens where
+			// it is used, against a real restored tree. Pin both.
+			raw := cfg.Targets[0].Restore.StripPrefix
+			if raw == "" {
+				t.Fatal("strip_prefix was dropped during decode")
+			}
+			rel, err := safepath.RelFromBackupPath(raw)
+			if err != nil {
+				t.Fatalf("a config that loaded cleanly failed to normalise: %v", err)
+			}
+			if rel != tt.want {
+				t.Errorf("normalised %q to %q, want %q", raw, rel, tt.want)
+			}
+		})
 	}
 }

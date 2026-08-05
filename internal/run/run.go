@@ -13,6 +13,7 @@ import (
 	"github.com/mxmchrbrt/constat/internal/assert"
 	"github.com/mxmchrbrt/constat/internal/config"
 	"github.com/mxmchrbrt/constat/internal/driver"
+	"github.com/mxmchrbrt/constat/internal/safepath"
 	"gopkg.in/yaml.v3"
 )
 
@@ -82,6 +83,43 @@ func restoreInto(ctx context.Context, d driver.Driver, t config.Target) (dir str
 	return dir, time.Since(start), cleanup, nil
 }
 
+// assertionRoot is the directory assertion paths are resolved against: the
+// restore directory itself, or the subdirectory named by restore.strip_prefix.
+//
+// Every failure here is an error rather than a verdict, deliberately. A prefix
+// that is not in the restored tree means the config is wrong, and the shape
+// that has to be avoided is the one where a mistyped prefix roots every
+// assertion at an empty directory and the target reports a long list of
+// convincing failures about a backup that is fine.
+func assertionRoot(restoreDir, stripPrefix string) (string, error) {
+	if stripPrefix == "" {
+		return restoreDir, nil
+	}
+
+	rel, err := safepath.RelFromBackupPath(stripPrefix)
+	if err != nil {
+		return "", fmt.Errorf("restore.strip_prefix: %w", err)
+	}
+
+	root, found, err := safepath.ResolveInRoot(restoreDir, rel)
+	if err != nil {
+		return "", fmt.Errorf("resolving restore.strip_prefix %q: %w", stripPrefix, err)
+	}
+	if !found {
+		return "", fmt.Errorf("restore.strip_prefix %q is not in the restored tree; it must be the path the snapshot recorded, which `restic snapshots --json` reports under \"paths\"", stripPrefix)
+	}
+
+	info, err := os.Stat(root)
+	if err != nil {
+		return "", fmt.Errorf("reading restore.strip_prefix %q: %w", stripPrefix, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("restore.strip_prefix %q is a file, not a directory", stripPrefix)
+	}
+
+	return root, nil
+}
+
 // Target builds the driver and assertions for t, restores if any assertion
 // needs files, runs every assertion, and reports PASS/FAIL/ERROR per assertion
 // to stdout. One broken assertion does not stop the others. Returns false if
@@ -115,7 +153,13 @@ func Target(ctx context.Context, t config.Target) bool {
 			fmt.Printf("ERROR %s: %v\n", t.Name, err)
 			return false
 		}
-		env.RestoreDir = dir
+		root, err := assertionRoot(dir, t.Restore.StripPrefix)
+		if err != nil {
+			fmt.Printf("ERROR %s: %v\n", t.Name, err)
+			return false
+		}
+
+		env.RestoreDir = root
 		fmt.Printf("      %s: restored in %s\n", t.Name, elapsed.Round(time.Millisecond))
 	}
 
