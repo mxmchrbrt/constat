@@ -32,7 +32,13 @@ func (a *snapshotAge) Check(ctx context.Context, env Env) (Result, error) {
 		return Result{}, fmt.Errorf("newest_snapshot_age_max: %w", err)
 	}
 
-	age := time.Since(snap.Time).Round(time.Second)
+	rawAge := time.Since(snap.Time)
+	if rawAge < 0 {
+		return Result{}, fmt.Errorf("newest_snapshot_age_max: snapshot %s has a timestamp %s in the future (clock skew?)",
+			snap.ID, (-rawAge).Round(time.Second))
+	}
+
+	age := rawAge.Round(time.Second)
 	passed := age <= a.maxAge
 
 	return Result{
