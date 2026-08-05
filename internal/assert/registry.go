@@ -17,7 +17,9 @@ var registry = map[string]Factory{}
 
 func Register(name string, f Factory) {
 	_, exists := registry[name]
-	if exists { panic("The name you entered is already in registry.") }
+	if exists {
+		panic("The name you entered is already in registry.")
+	}
 	registry[name] = f
 }
 
