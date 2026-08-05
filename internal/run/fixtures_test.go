@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mxmchrbrt/constat/internal/config"
+	"github.com/mxmchrbrt/constat/internal/report"
 	"gopkg.in/yaml.v3"
 )
 
@@ -104,8 +105,9 @@ func runFixture(t *testing.T, dir string) {
 		Timeout: 2 * time.Minute,
 	}
 
-	var passed bool
-	out := captureStdout(t, func() { passed = Target(context.Background(), tgt) })
+	var outcome report.Target
+	out := captureStdout(t, func() { outcome = Target(context.Background(), tgt) })
+	passed := outcome.Verdict == report.Pass
 	t.Logf("output:\n%s", out)
 
 	if passed != want.TargetPasses {

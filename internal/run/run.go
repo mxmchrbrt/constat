@@ -16,6 +16,7 @@ import (
 	"github.com/mxmchrbrt/constat/internal/config"
 	"github.com/mxmchrbrt/constat/internal/container"
 	"github.com/mxmchrbrt/constat/internal/driver"
+	"github.com/mxmchrbrt/constat/internal/report"
 	"github.com/mxmchrbrt/constat/internal/safepath"
 	"gopkg.in/yaml.v3"
 )
@@ -171,26 +172,54 @@ func openDatabase(ctx context.Context, t config.Target, restoreDir string) (db *
 
 // Target builds the driver and assertions for t, restores if any assertion
 // needs files, runs every assertion, and reports PASS/FAIL/ERROR per assertion
-// to stdout. One broken assertion does not stop the others. Returns false if
-// the target as a whole failed.
+// to stdout. One broken assertion does not stop the others.
+//
+// Returns the structured outcome as well as printing it. Both are needed and
+// neither replaces the other: the printing is what an operator watching a
+// terminal sees, and the returned value is what becomes the signed report.
+// Deriving one from the other — parsing stdout, or silencing it — would make
+// the evidence and the operator's view able to disagree.
 //
 // The restore directory is always removed, including on the error and panic
 // paths: a verification tool that leaves scratch space behind after an
 // interrupt is its own bug report.
-func Target(ctx context.Context, t config.Target) bool {
+func Target(ctx context.Context, t config.Target) report.Target {
 	ctx, cancel := context.WithTimeout(ctx, t.EffectiveTimeout())
 	defer cancel()
 
+	out := report.Target{
+		Name:       t.Name,
+		Verdict:    report.Pass,
+		Kind:       t.Source.Kind,
+		Repository: t.Source.Repo,
+		Assertions: []report.Assertion{},
+	}
+
+	// fail records a whole-target outcome that stops the run: there is nothing
+	// left to check once the driver, the restore, or the config is broken.
+	fail := func(verdict report.Verdict, name string, err error) report.Target {
+		label := "ERROR"
+		if verdict == report.Fail {
+			label = "FAIL "
+		}
+		fmt.Printf("%s %s: %v\n", label, t.Name, err)
+		out.Verdict = verdict
+		out.Assertions = append(out.Assertions, report.Assertion{
+			Name:    name,
+			Verdict: verdict,
+			Message: err.Error(),
+		})
+		return out
+	}
+
 	d, err := newDriver(t.Source)
 	if err != nil {
-		fmt.Printf("ERROR %s: building driver: %v\n", t.Name, err)
-		return false
+		return fail(report.Error, "driver", fmt.Errorf("building driver: %w", err))
 	}
 
 	assertions, err := buildAssertions(t.Assert)
 	if err != nil {
-		fmt.Printf("ERROR %s: building assertions: %v\n", t.Name, err)
-		return false
+		return fail(report.Error, "config", fmt.Errorf("building assertions: %w", err))
 	}
 
 	env := assert.Env{Driver: d}
@@ -199,20 +228,18 @@ func Target(ctx context.Context, t config.Target) bool {
 		dir, elapsed, cleanup, err := restoreInto(ctx, d, t)
 		defer cleanup()
 		if err != nil {
-			fmt.Printf("ERROR %s: %v\n", t.Name, err)
-			return false
+			return fail(report.Error, "restore", err)
 		}
 		root, err := assertionRoot(dir, t.Restore.StripPrefix)
 		if err != nil {
-			fmt.Printf("ERROR %s: %v\n", t.Name, err)
-			return false
+			return fail(report.Error, "restore", err)
 		}
 
 		env.RestoreDir = root
+		out.RestoreDurationMs = elapsed.Milliseconds()
 		fmt.Printf("      %s: restored in %s\n", t.Name, elapsed.Round(time.Millisecond))
 	}
 
-	passed := true
 	skipDatabase := false
 
 	if assert.AnyRequiresDatabase(assertions) {
@@ -227,14 +254,24 @@ func Target(ctx context.Context, t config.Target) bool {
 			// database assertions cannot run afterwards, and this line is
 			// their explanation.
 			fmt.Printf("FAIL  %s: %v\n", t.Name, loadFailed)
-			passed = false
+			out.Verdict = report.Fail
+			out.Assertions = append(out.Assertions, report.Assertion{
+				Name:    "database_load",
+				Verdict: report.Fail,
+				Message: loadFailed.Error(),
+			})
 			skipDatabase = true
 		case err != nil:
 			// Everything else — no container runtime, a missing image, a
 			// database that never came up — is the tool failing, not the
 			// backup.
 			fmt.Printf("ERROR %s: %v\n", t.Name, err)
-			passed = false
+			out.Verdict = report.Error
+			out.Assertions = append(out.Assertions, report.Assertion{
+				Name:    "database_load",
+				Verdict: report.Error,
+				Message: err.Error(),
+			})
 			skipDatabase = true
 		default:
 			env.DB = db.DB
@@ -249,17 +286,44 @@ func Target(ctx context.Context, t config.Target) bool {
 		res, err := a.Check(ctx, env)
 		if err != nil {
 			fmt.Printf("ERROR %s: %v\n", t.Name, err)
-			passed = false
+			out.Assertions = append(out.Assertions, report.Assertion{
+				Name:    assertionName(a),
+				Verdict: report.Error,
+				Message: err.Error(),
+			})
+			// Error outranks fail: a run that could not answer must not be
+			// reported as one that answered "no".
+			out.Verdict = report.Error
 			continue
 		}
 
+		verdict := report.Pass
 		status := "PASS "
 		if !res.Passed {
+			verdict = report.Fail
 			status = "FAIL "
-			passed = false
+			if out.Verdict == report.Pass {
+				out.Verdict = report.Fail
+			}
 		}
 		fmt.Printf("%s %s: %s\n", status, t.Name, res.Message)
+
+		out.Assertions = append(out.Assertions, report.Assertion{
+			Name:       res.Name,
+			Verdict:    verdict,
+			Message:    res.Message,
+			DurationMs: res.Duration.Milliseconds(),
+		})
 	}
 
-	return passed
+	return out
+}
+
+// assertionName recovers the registered name of an assertion whose Check
+// errored, since a failed Check returns no Result to read it from.
+func assertionName(a assert.Assertion) string {
+	if n, ok := a.(interface{ AssertionName() string }); ok {
+		return n.AssertionName()
+	}
+	return "assertion"
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mxmchrbrt/constat/internal/config"
+	"github.com/mxmchrbrt/constat/internal/report"
 	"gopkg.in/yaml.v3"
 )
 
@@ -149,8 +150,9 @@ func TestEndToEnd_HealthyRepositoryPasses(t *testing.T) {
 		"- file_count_min:\n    min: 3\n    path: files\n"+
 		"- newest_file_age_max:\n    max_age: 24h\n")
 
-	var passed bool
-	out := captureStdout(t, func() { passed = Target(context.Background(), tgt) })
+	var outcome report.Target
+	out := captureStdout(t, func() { outcome = Target(context.Background(), tgt) })
+	passed := outcome.Verdict == report.Pass
 	t.Logf("target output:\n%s", out)
 
 	if !passed {
@@ -187,8 +189,9 @@ func TestEndToEnd_StaleContentsFailWhileSnapshotPasses(t *testing.T) {
 		"- newest_snapshot_age_max: 24h\n"+
 		"- newest_file_age_max:\n    max_age: 10m\n")
 
-	var passed bool
-	out := captureStdout(t, func() { passed = Target(context.Background(), tgt) })
+	var outcome report.Target
+	out := captureStdout(t, func() { outcome = Target(context.Background(), tgt) })
+	passed := outcome.Verdict == report.Pass
 	t.Logf("target output:\n%s", out)
 
 	if passed {
@@ -211,8 +214,9 @@ func TestEndToEnd_MissingPathFails(t *testing.T) {
 	tgt := labTarget(t, repo, passwordFile, backupPath,
 		"- path_exists: does-not-exist.php\n")
 
-	var passed bool
-	out := captureStdout(t, func() { passed = Target(context.Background(), tgt) })
+	var outcome report.Target
+	out := captureStdout(t, func() { outcome = Target(context.Background(), tgt) })
+	passed := outcome.Verdict == report.Pass
 
 	if passed {
 		t.Errorf("missing path reported as a pass:\n%s", out)
@@ -249,8 +253,9 @@ func TestEndToEnd_UnreadableRepositoryErrorsWithOutput(t *testing.T) {
 	tgt := labTarget(t, filepath.Join(t.TempDir(), "no-such-repo"), passwordFile, backupPath,
 		"- newest_snapshot_age_max: 24h\n")
 
-	var passed bool
-	out := captureStdout(t, func() { passed = Target(context.Background(), tgt) })
+	var outcome report.Target
+	out := captureStdout(t, func() { outcome = Target(context.Background(), tgt) })
+	passed := outcome.Verdict == report.Pass
 
 	if passed {
 		t.Errorf("target passed against a nonexistent repository:\n%s", out)
@@ -311,8 +316,9 @@ func TestEndToEnd_WarmCacheDoesNotMaskCorruption(t *testing.T) {
 
 	tgt := labTarget(t, repo, passwordFile, backupPath, "- path_exists: config.php\n")
 
-	var passed bool
-	out := captureStdout(t, func() { passed = Target(context.Background(), tgt) })
+	var outcome report.Target
+	out := captureStdout(t, func() { outcome = Target(context.Background(), tgt) })
+	passed := outcome.Verdict == report.Pass
 	t.Logf("output:\n%s", out)
 
 	if passed {

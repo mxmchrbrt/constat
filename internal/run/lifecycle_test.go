@@ -12,6 +12,7 @@ import (
 	"github.com/mxmchrbrt/constat/internal/assert"
 	"github.com/mxmchrbrt/constat/internal/config"
 	"github.com/mxmchrbrt/constat/internal/driver"
+	"github.com/mxmchrbrt/constat/internal/report"
 	"gopkg.in/yaml.v3"
 )
 
@@ -113,6 +114,12 @@ func targetWith(t *testing.T, assertName string) config.Target {
 
 // runTargetWith swaps in a fake driver for the duration of one Target call.
 func runTargetWith(ctx context.Context, d driver.Driver, t config.Target) bool {
+	return runTargetFor(ctx, d, t).Verdict == report.Pass
+}
+
+// runTargetFor is the same seam, for the tests that need the structured
+// outcome rather than just whether it passed.
+func runTargetFor(ctx context.Context, d driver.Driver, t config.Target) report.Target {
 	orig := newDriver
 	newDriver = func(config.Source) (driver.Driver, error) { return d, nil }
 	defer func() { newDriver = orig }()
@@ -277,7 +284,7 @@ func TestTarget_UnknownKindDoesNotRestore(t *testing.T) {
 	tgt := targetWith(t, "stub_needs_restore")
 	tgt.Source.Kind = "borg"
 
-	if Target(context.Background(), tgt) {
+	if Target(context.Background(), tgt).Verdict == report.Pass {
 		t.Fatal("expected target to fail on unknown source kind")
 	}
 }
