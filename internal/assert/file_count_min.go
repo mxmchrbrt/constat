@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/mxmchrbrt/constat/internal/safepath"
 	"gopkg.in/yaml.v3"
 )
 
@@ -38,7 +39,7 @@ func newFileCountMin(node *yaml.Node) (Assertion, error) {
 	if rel == "" {
 		rel = "."
 	}
-	clean, err := validateRelPath(rel)
+	clean, err := safepath.ValidateRelPath(rel)
 	if err != nil {
 		return nil, fmt.Errorf("file_count_min: %w", err)
 	}
@@ -57,7 +58,7 @@ func (a *fileCountMin) Requires() Requirements { return Requirements{Restore: tr
 func (a *fileCountMin) Check(ctx context.Context, env Env) (Result, error) {
 	start := time.Now()
 
-	resolved, found, err := resolveInRoot(env.RestoreDir, a.path)
+	resolved, found, err := safepath.ResolveInRoot(env.RestoreDir, a.path)
 	if err != nil {
 		return Result{}, fmt.Errorf("file_count_min %q: %w", a.path, err)
 	}

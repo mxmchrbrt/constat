@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mxmchrbrt/constat/internal/safepath"
 	"gopkg.in/yaml.v3"
 )
 
@@ -23,7 +24,7 @@ func newPathExists(node *yaml.Node) (Assertion, error) {
 	if err := node.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("path_exists: %w", err)
 	}
-	clean, err := validateRelPath(raw)
+	clean, err := safepath.ValidateRelPath(raw)
 	if err != nil {
 		return nil, fmt.Errorf("path_exists: %w", err)
 	}
@@ -35,7 +36,7 @@ func (a *pathExists) Requires() Requirements { return Requirements{Restore: true
 func (a *pathExists) Check(ctx context.Context, env Env) (Result, error) {
 	start := time.Now()
 
-	_, found, err := resolveInRoot(env.RestoreDir, a.path)
+	_, found, err := safepath.ResolveInRoot(env.RestoreDir, a.path)
 	if err != nil {
 		return Result{}, fmt.Errorf("path_exists %q: %w", a.path, err)
 	}
