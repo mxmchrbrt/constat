@@ -7,6 +7,8 @@ package run
 import (
 	"context"
 	"fmt"
+	"os"
+	"time"
 
 	"github.com/mxmchrbrt/constat/internal/assert"
 	"github.com/mxmchrbrt/constat/internal/config"
@@ -22,6 +24,10 @@ func buildDriver(src config.Source) (driver.Driver, error) {
 		return nil, fmt.Errorf("unknown source kind %q", src.Kind)
 	}
 }
+
+// newDriver is a seam: tests swap it to run the full Target path against a
+// fake driver without a live restic binary.
+var newDriver = buildDriver
 
 // buildAssertions turns the undecoded assert: entries of a target into
 // assertions. Each entry must be a single-key mapping: the key names a
@@ -50,11 +56,45 @@ func buildAssertions(nodes []yaml.Node) ([]assert.Assertion, error) {
 	return assertions, nil
 }
 
-// Target builds the driver and assertions for t, runs every assertion, and
-// reports PASS/FAIL/ERROR per assertion to stdout. One broken assertion does
-// not stop the others. Returns false if the target as a whole failed.
+// restoreInto creates a disposable directory, restores the target's snapshot
+// into it, and returns the directory plus a cleanup func. The cleanup func is
+// returned even when the restore fails, so the caller can always defer it
+// without checking the error first.
+func restoreInto(ctx context.Context, d driver.Driver, t config.Target) (dir string, elapsed time.Duration, cleanup func(), err error) {
+	dir, err = os.MkdirTemp("", "constat-restore-")
+	if err != nil {
+		return "", 0, func() {}, fmt.Errorf("creating restore directory: %w", err)
+	}
+
+	// MkdirTemp already creates 0700, but the restored tree carries customer
+	// data and this is cheap to make explicit rather than inherited.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		os.RemoveAll(dir)
+		return "", 0, func() {}, fmt.Errorf("securing restore directory: %w", err)
+	}
+
+	cleanup = func() { os.RemoveAll(dir) }
+
+	start := time.Now()
+	if err := d.Restore(ctx, dir, t.Restore.Paths); err != nil {
+		return dir, time.Since(start), cleanup, fmt.Errorf("restoring: %w", err)
+	}
+	return dir, time.Since(start), cleanup, nil
+}
+
+// Target builds the driver and assertions for t, restores if any assertion
+// needs files, runs every assertion, and reports PASS/FAIL/ERROR per assertion
+// to stdout. One broken assertion does not stop the others. Returns false if
+// the target as a whole failed.
+//
+// The restore directory is always removed, including on the error and panic
+// paths: a verification tool that leaves scratch space behind after an
+// interrupt is its own bug report.
 func Target(ctx context.Context, t config.Target) bool {
-	d, err := buildDriver(t.Source)
+	ctx, cancel := context.WithTimeout(ctx, t.EffectiveTimeout())
+	defer cancel()
+
+	d, err := newDriver(t.Source)
 	if err != nil {
 		fmt.Printf("ERROR %s: building driver: %v\n", t.Name, err)
 		return false
@@ -67,6 +107,18 @@ func Target(ctx context.Context, t config.Target) bool {
 	}
 
 	env := assert.Env{Driver: d}
+
+	if assert.AnyRequiresRestore(assertions) {
+		dir, elapsed, cleanup, err := restoreInto(ctx, d, t)
+		defer cleanup()
+		if err != nil {
+			fmt.Printf("ERROR %s: %v\n", t.Name, err)
+			return false
+		}
+		env.RestoreDir = dir
+		fmt.Printf("      %s: restored in %s\n", t.Name, elapsed.Round(time.Millisecond))
+	}
+
 	passed := true
 
 	for _, a := range assertions {

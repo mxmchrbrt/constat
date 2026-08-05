@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/mxmchrbrt/constat/internal/config"
 	"github.com/mxmchrbrt/constat/internal/run"
@@ -21,12 +23,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx := context.Background()
+	// On SIGINT/SIGTERM, cancel the context so the in-flight restore stops
+	// and its deferred cleanup runs. os.Exit would skip those defers and
+	// leave scratch directories behind.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	failed := false
 
 	for _, t := range cfg.Targets {
 		if !run.Target(ctx, t) {
 			failed = true
+		}
+		if ctx.Err() != nil {
+			fmt.Fprintln(os.Stderr, "interrupted")
+			failed = true
+			break
 		}
 	}
 
