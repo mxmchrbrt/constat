@@ -86,6 +86,10 @@ func StartPostgres(ctx context.Context, rt *Runtime, image, dumpPath string) (*P
 	}
 	p.DB = db
 
+	if err := p.checkDumpVersion(ctx, dumpPath); err != nil {
+		return p, err
+	}
+
 	if err := p.load(ctx, dumpPath); err != nil {
 		// Deliberately not Close()d here: the caller defers Close, and the
 		// container must stay reachable long enough for nothing — but the
@@ -136,6 +140,38 @@ func waitForPostgres(ctx context.Context, hostPort, password string) (*sql.DB, e
 		case <-ticker.C:
 		}
 	}
+}
+
+// checkDumpVersion refuses a dump that is newer than the server before psql
+// gets a chance to fail confusingly at it. Reported as a LoadError, because a
+// dump that cannot be loaded into the operator's own image is a verdict about
+// the backup — taxonomy #9 — not a broken run.
+//
+// Silent when the dump carries no readable version header: the check improves
+// the message where it can and never blocks a load it does not understand.
+func (p *Postgres) checkDumpVersion(ctx context.Context, dumpPath string) error {
+	f, err := os.Open(dumpPath)
+	if err != nil {
+		return &LoadError{Path: dumpPath, Err: err}
+	}
+	defer f.Close()
+
+	dumpMajor, dumpVersion, ok := parseDumpVersion(f)
+	if !ok {
+		return nil
+	}
+
+	serverVersion, err := p.ServerVersion(ctx)
+	if err != nil {
+		// Not fatal: this check is a courtesy, and psql will still report the
+		// mismatch in its own words if there is one.
+		return nil
+	}
+
+	if err := checkVersionCompatible(dumpVersion, dumpMajor, serverVersion); err != nil {
+		return &LoadError{Path: dumpPath, Err: err}
+	}
+	return nil
 }
 
 // load streams the dump into psql inside the container.
