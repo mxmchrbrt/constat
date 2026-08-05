@@ -7,6 +7,8 @@
 *.dll
 *.so
 *.dylib
+/cmd/constat/constat
+/constat
 
 # Test binary, built with `go test -c`
 *.test
