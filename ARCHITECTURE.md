@@ -358,6 +358,20 @@ outright, keeping only the underlying cause and a host-only destination string
 built separately from the parsed URL. Found while writing the redaction, not
 assumed correct — the first version was wrong and a test caught it.
 
+### The release job's own tests run `-short`
+`ci.yml` runs the full suite, container tests and all, on every push — that was
+never revisited from session 6/7's flag that it might be worth a separate slow
+job, and it still isn't resolved here. `release.yml` is narrower: it only needs
+to know the tagged commit is safe to ship, and that commit already passed the
+full suite to get merged. Making the release job depend on a fresh container
+pull succeeding on the runner would let a flaky image registry block a release
+of code that is already known-good.
+
+**Revisit when:** the `ci.yml` question above is finally decided — the two are
+the same shape of trade-off (fast and slightly less thorough vs. slow and
+fully thorough) and should probably be resolved together rather than
+separately.
+
 ## Open questions (deferred, with reasons)
 
 ### What the report deliberately does not record
