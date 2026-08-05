@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -16,6 +17,24 @@ type Target struct {
 	Source  Source      `yaml:"source"`
 	Restore Restore     `yaml:"restore"`
 	Assert  []yaml.Node `yaml:"assert"`
+
+	// Timeout bounds the whole target: restore plus every assertion. Zero
+	// means DefaultTimeout. A hung restic must not hang the run — failure
+	// mode #10 is about time.
+	Timeout time.Duration `yaml:"timeout"`
+}
+
+// DefaultTimeout applies when a target sets no timeout. Generous enough for a
+// moderate restore, small enough that a 500 GB target forces the operator to
+// set it explicitly and therefore to think about their RTO.
+const DefaultTimeout = time.Hour
+
+// EffectiveTimeout is t.Timeout, or DefaultTimeout when unset.
+func (t Target) EffectiveTimeout() time.Duration {
+	if t.Timeout <= 0 {
+		return DefaultTimeout
+	}
+	return t.Timeout
 }
 
 type Source struct {
@@ -108,6 +127,9 @@ func validate(cfg *Config, root *yaml.Node) error {
 		}
 		if len(t.Assert) == 0 {
 			return fmt.Errorf("%s: assert list is empty, nothing to verify", loc)
+		}
+		if t.Timeout < 0 {
+			return fmt.Errorf("%s: timeout must be positive, got %s", loc, t.Timeout)
 		}
 	}
 

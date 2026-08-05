@@ -17,7 +17,11 @@ type Snapshot struct {
 
 type Driver interface {
 	Latest(ctx context.Context) (*Snapshot, error)
-	Restore(ctx context.Context, dest string) error
+
+	// Restore writes the latest snapshot into dest. paths, when non-empty,
+	// restricts what is restored (restic --include semantics: a prefix match
+	// against paths inside the snapshot). An empty paths restores everything.
+	Restore(ctx context.Context, dest string, paths []string) error
 }
 
 // ResticDriver implements Driver against a restic repository.
@@ -64,13 +68,18 @@ func (d *ResticDriver) Latest(ctx context.Context) (*Snapshot, error) {
 	return &Snapshot{ID: newest.ShortID, Time: newest.Time}, nil
 }
 
-func (d *ResticDriver) Restore(ctx context.Context, dest string) error {
-	cmd := exec.CommandContext(ctx, "restic",
+func (d *ResticDriver) Restore(ctx context.Context, dest string, paths []string) error {
+	args := []string{
 		"-r", d.Repo,
 		"--password-file", d.PasswordFile,
 		"restore", "latest",
 		"--target", dest,
-	)
+	}
+	for _, p := range paths {
+		args = append(args, "--include", p)
+	}
+
+	cmd := exec.CommandContext(ctx, "restic", args...)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
