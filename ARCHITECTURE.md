@@ -21,6 +21,42 @@ bool.
 parameterised, like "a container running *this* image". At that point
 `Requirements` stops being a set of flags and the question reopens.
 
+**Update, session 7 — the second field arrived and the design held.**
+`Requirements{Restore, Database bool}`. No existing assertion changed, which is
+the whole thing this shape was chosen for.
+
+The parameterised case this section anticipated did *not* materialise, and it is
+worth recording why rather than counting it as luck. The image is named on the
+target (`verify_with.image`), not on the assertion, so what the assertion
+declares stays a boolean: "I need the database this target defines". Had the
+image been per-assertion, `Requirements` would have needed a value here and the
+question would have reopened exactly as predicted. Keeping the parameter on the
+target is what avoided it, and that is the thing to preserve.
+
+### What an assertion gets for a database — `Env.DB *sql.DB`
+Three shapes were on the table, and this is a fork in the same family as the
+`Env`/driver one from session 3.
+
+A `*sql.DB` won. Session 8's assertions want a typed, checked scan and a
+statement timeout; both come free, and neither can be had from parsing text.
+The container becomes an implementation detail assertions never see.
+
+The alternative worth recording is exec-into-the-container: assertions run psql
+inside and parse its output. It is genuinely tempting — zero dependencies, no
+published port, the container stays fully sealed — and it was rejected because
+every query assertion would then parse text. Text parsing is the failure mode
+this project can least afford: it fails by returning a plausible wrong answer,
+which is precisely the shape of bug a verification tool must not have.
+
+The costs, stated plainly: a dependency on `github.com/jackc/pgx/v5`, and a port
+published on loopback because the connection comes from the host rather than
+from inside the container.
+
+**Revisit when:** a second database engine arrives. MySQL means a second driver
+and `Env.DB` stops being obviously the right name for one connection to one
+engine — that is the moment to ask whether `Env` should carry a small interface
+instead of a `*sql.DB`.
+
 ### Per-target timeout default — 1 hour
 Bounds restore plus every assertion. Chosen over unbounded (a hung restic would
 hang the run forever, which is the failure mode #10 the timeout exists to
@@ -132,7 +168,65 @@ be the last one.
 their run, or a second flag joins it — at which point this stops being one
 constant and becomes a deliberate "verification profile" for the driver.
 
+### Which database failures are verdicts, and which are broken runs
+The load step is the first place where a failure could honestly be reported
+either way, so the boundary was drawn explicitly:
+
+| Situation | Reported as | Why |
+|---|---|---|
+| The dump will not load | FAIL | Taxonomy #9 and #4 surface exactly here. This is the failure being hunted. |
+| The dump is absent from the backup | FAIL | Taxonomy #2 with a database attached. |
+| No `verify_with` block | ERROR | The config is wrong, not the backup. |
+| No container runtime | ERROR | The tool cannot run. |
+| Image missing or won't start | ERROR | Same. |
+
+The risk accepted on the FAIL side is that a genuinely broken config — wrong
+image, a `load:` pointing at the wrong file — reads as a failed backup and
+alerts. That was judged the better error: the opposite mistake is a dump that
+genuinely cannot be restored, reported as tool breakage, and quietly not
+alerted on.
+
+When the database is unavailable, database assertions are skipped rather than
+reported, and the single FAIL or ERROR line is their explanation. File
+assertions still run: one broken thing must not abort the others.
+
+**Revisit when:** a real operator hits the wrong-config-reads-as-FAIL case and
+finds it confusing. The fix then is a clearer message, not a reclassification —
+moving load failures to ERROR would take the alert away from the case that
+needs it most.
+
 ## Open questions (deferred, with reasons)
+
+### Container hardening stops short of read-only and dropped capabilities
+The container gets no host network, a loopback-only published port, memory and
+pids caps, `no-new-privileges`, and no mounts. It does not get `--read-only`
+(Postgres needs a writable data directory, which means a tmpfs and a size to
+guess at) or `--cap-drop=ALL` (untested against the Postgres entrypoint, which
+does own its uid/gid setup).
+
+Both were skipped for the same reason: adding a hardening flag that breaks the
+image on some host, in a check that runs unattended at 3am, trades a real
+availability failure for a speculative isolation gain. The container is already
+unreachable from outside loopback and lives seconds.
+
+**Revisit when:** session 12's audit pass, with time to actually test each flag
+against the image rather than assume. `--read-only` with an explicit tmpfs for
+`/var/lib/postgresql/data` is the more valuable of the two.
+
+### The generated database credential sits next to an author-only rule
+`CLAUDE.md` keeps anything touching passwords or signing keys in the author's
+hands. This is a randomly generated, single-run credential for a loopback-only
+container — not the customer's repository passphrase and not a signing key — so
+it was treated as in scope, but it is close enough to the line to be worth
+flagging rather than assuming.
+
+What it does: 24 random bytes from `crypto/rand`, written to a file mode 0600
+and passed with `--env-file` so it never appears in `ps`, redacted out of any
+error before that error can reach stdout.
+
+**Revisit when:** the author reviews it. If the rule is meant to cover any
+credential at all rather than the repository's own secrets, this is the piece to
+rewrite, and the surrounding code does not change.
 
 ### Severity on `Result` — deferred
 `Result` carries `Duration` but not `Severity`. Duration is passive: it gets
