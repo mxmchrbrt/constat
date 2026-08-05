@@ -64,12 +64,16 @@ type stubAssertion struct {
 	err      error
 
 	sawRestoreDir string
+	sawDB         bool
+	ran           bool
 }
 
 func (s *stubAssertion) Requires() assert.Requirements { return s.requires }
 
 func (s *stubAssertion) Check(ctx context.Context, env assert.Env) (assert.Result, error) {
 	s.sawRestoreDir = env.RestoreDir
+	s.sawDB = env.DB != nil
+	s.ran = true
 	if s.err != nil {
 		return assert.Result{}, s.err
 	}
@@ -83,6 +87,7 @@ var (
 	stubMetadataOnly = &stubAssertion{requires: assert.Requirements{}, passed: true}
 	stubFailsRestore = &stubAssertion{requires: assert.Requirements{Restore: true}, passed: false}
 	stubErrsRestore  = &stubAssertion{requires: assert.Requirements{Restore: true}, err: errors.New("stub check error")}
+	stubNeedsDB      = &stubAssertion{requires: assert.Requirements{Database: true}, passed: true}
 )
 
 func init() {
@@ -90,6 +95,7 @@ func init() {
 	assert.Register("stub_metadata_only", func(*yaml.Node) (assert.Assertion, error) { return stubMetadataOnly, nil })
 	assert.Register("stub_fails_restore", func(*yaml.Node) (assert.Assertion, error) { return stubFailsRestore, nil })
 	assert.Register("stub_errs_restore", func(*yaml.Node) (assert.Assertion, error) { return stubErrsRestore, nil })
+	assert.Register("stub_needs_database", func(*yaml.Node) (assert.Assertion, error) { return stubNeedsDB, nil })
 }
 
 func targetWith(t *testing.T, assertName string) config.Target {

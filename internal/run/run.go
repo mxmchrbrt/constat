@@ -6,12 +6,15 @@ package run
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/mxmchrbrt/constat/internal/assert"
 	"github.com/mxmchrbrt/constat/internal/config"
+	"github.com/mxmchrbrt/constat/internal/container"
 	"github.com/mxmchrbrt/constat/internal/driver"
 	"github.com/mxmchrbrt/constat/internal/safepath"
 	"gopkg.in/yaml.v3"
@@ -120,6 +123,52 @@ func assertionRoot(restoreDir, stripPrefix string) (string, error) {
 	return root, nil
 }
 
+// newRuntime is a seam: tests swap it to exercise the "no container runtime"
+// path without uninstalling docker.
+var newRuntime = container.DetectRuntime
+
+// openDatabase brings up the target's verify_with container and loads the dump
+// out of the restored tree into it.
+//
+// The two error returns are deliberately separate rather than one error the
+// caller inspects. A dump that will not load is a verdict about the backup; a
+// missing container runtime is a broken run. Collapsing them would mean either
+// alerting on the operator's typo or staying quiet about a dump that cannot be
+// restored, and both are wrong in ways that matter.
+//
+// The returned *container.Postgres is safe to Close on every path, including
+// when it is nil.
+func openDatabase(ctx context.Context, t config.Target, restoreDir string) (db *container.Postgres, loadFailed error, err error) {
+	if t.VerifyWith == nil {
+		return nil, nil, fmt.Errorf("an assertion needs a database but the target has no verify_with block")
+	}
+
+	dumpPath, found, err := safepath.ResolveInRoot(restoreDir, filepath.Clean(t.VerifyWith.Load))
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolving verify_with.load %q: %w", t.VerifyWith.Load, err)
+	}
+	if !found {
+		// A dump that is not in the backup at all is a verdict, not a broken
+		// run: that is failure mode #2 with a database attached.
+		return nil, fmt.Errorf("dump %q is not in the restored tree", t.VerifyWith.Load), nil
+	}
+
+	rt, err := newRuntime(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	pg, err := container.StartPostgres(ctx, rt, t.VerifyWith.Image, dumpPath)
+	var loadErr *container.LoadError
+	if errors.As(err, &loadErr) {
+		return pg, loadErr, nil
+	}
+	if err != nil {
+		return pg, nil, err
+	}
+	return pg, nil, nil
+}
+
 // Target builds the driver and assertions for t, restores if any assertion
 // needs files, runs every assertion, and reports PASS/FAIL/ERROR per assertion
 // to stdout. One broken assertion does not stop the others. Returns false if
@@ -164,8 +213,39 @@ func Target(ctx context.Context, t config.Target) bool {
 	}
 
 	passed := true
+	skipDatabase := false
+
+	if assert.AnyRequiresDatabase(assertions) {
+		db, loadFailed, err := openDatabase(ctx, t, env.RestoreDir)
+		defer db.Close()
+
+		switch {
+		case loadFailed != nil:
+			// The author's call, and the right one: a dump that will not load
+			// is the failure being hunted — taxonomy #9 and #4 both surface
+			// exactly here — so it is a verdict, not a broken run. The
+			// database assertions cannot run afterwards, and this line is
+			// their explanation.
+			fmt.Printf("FAIL  %s: %v\n", t.Name, loadFailed)
+			passed = false
+			skipDatabase = true
+		case err != nil:
+			// Everything else — no container runtime, a missing image, a
+			// database that never came up — is the tool failing, not the
+			// backup.
+			fmt.Printf("ERROR %s: %v\n", t.Name, err)
+			passed = false
+			skipDatabase = true
+		default:
+			env.DB = db.DB
+		}
+	}
 
 	for _, a := range assertions {
+		if skipDatabase && a.Requires().Database {
+			continue
+		}
+
 		res, err := a.Check(ctx, env)
 		if err != nil {
 			fmt.Printf("ERROR %s: %v\n", t.Name, err)

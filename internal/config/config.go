@@ -19,6 +19,11 @@ type Target struct {
 	Restore Restore     `yaml:"restore"`
 	Assert  []yaml.Node `yaml:"assert"`
 
+	// VerifyWith describes the disposable database the restored dump is loaded
+	// into. Required only when an assertion needs a database; a target that
+	// only checks files never starts a container.
+	VerifyWith *VerifyWith `yaml:"verify_with"`
+
 	// Timeout bounds the whole target: restore plus every assertion. Zero
 	// means DefaultTimeout. A hung restic must not hang the run — failure
 	// mode #10 is about time.
@@ -60,6 +65,22 @@ type Restore struct {
 	// assertion silently. A prefix that is not in the restored tree is an
 	// error, not a failed verification.
 	StripPrefix string `yaml:"strip_prefix"`
+}
+
+// VerifyWith is the disposable environment a dump is restored into. Proving a
+// dump loads is the difference between this tool and a checksum: `restic check`
+// can tell you the bytes are intact, and nothing but a real load tells you the
+// database comes back.
+type VerifyWith struct {
+	// Image is the container image, e.g. postgres:16-alpine. Its version is
+	// half of the version-mismatch check (taxonomy #9): a dump taken from 16
+	// and loaded into 15 fails here, which is the only place it ever surfaces.
+	Image string `yaml:"image"`
+
+	// Load is the dump file, relative to the assertion root — so relative to
+	// restore.strip_prefix when that is set. Streamed into the container on
+	// stdin, so the container needs no mounts.
+	Load string `yaml:"load"`
 }
 
 func Load(path string) (*Config, error) {
@@ -145,6 +166,20 @@ func validate(cfg *Config, root *yaml.Node) error {
 		if t.Restore.StripPrefix != "" {
 			if _, err := safepath.RelFromBackupPath(t.Restore.StripPrefix); err != nil {
 				return fmt.Errorf("%s: restore.strip_prefix: %w", loc, err)
+			}
+		}
+		if v := t.VerifyWith; v != nil {
+			if v.Image == "" {
+				return fmt.Errorf("%s: verify_with.image is required", loc)
+			}
+			if v.Load == "" {
+				return fmt.Errorf("%s: verify_with.load is required", loc)
+			}
+			// The dump path comes out of the restored tree, so it gets the
+			// same treatment as an assertion path: no absolute paths, no
+			// escaping the restore root.
+			if _, err := safepath.ValidateRelPath(v.Load); err != nil {
+				return fmt.Errorf("%s: verify_with.load: %w", loc, err)
 			}
 		}
 	}

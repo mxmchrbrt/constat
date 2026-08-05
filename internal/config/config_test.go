@@ -267,3 +267,81 @@ targets:
 		})
 	}
 }
+
+func TestLoad_VerifyWith(t *testing.T) {
+	withBlock := func(block string) string {
+		return `
+targets:
+  - name: app-db
+    source:
+      kind: restic
+      repo: /repo
+      password_file: /pass
+` + block + `    assert:
+      - path_exists: config.php
+`
+	}
+
+	tests := []struct {
+		name    string
+		block   string
+		wantErr string
+	}{
+		{
+			name:  "no verify_with at all is fine",
+			block: "",
+		},
+		{
+			name:  "image and load",
+			block: "    verify_with:\n      image: postgres:16-alpine\n      load: db/dump.sql\n",
+		},
+		{
+			name:    "image missing",
+			block:   "    verify_with:\n      load: db/dump.sql\n",
+			wantErr: "verify_with.image is required",
+		},
+		{
+			name:    "load missing",
+			block:   "    verify_with:\n      image: postgres:16-alpine\n",
+			wantErr: "verify_with.load is required",
+		},
+		{
+			// The dump path comes out of the restored tree, so it gets the
+			// same guard as an assertion path.
+			name:    "absolute load path rejected",
+			block:   "    verify_with:\n      image: postgres:16-alpine\n      load: /etc/passwd\n",
+			wantErr: "must be relative to the restore root",
+		},
+		{
+			name:    "traversal in load path rejected",
+			block:   "    verify_with:\n      image: postgres:16-alpine\n      load: ../../etc/passwd\n",
+			wantErr: "escapes the restore root",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := load(t, withBlock(tt.block))
+
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected an error containing %q, got none", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("error %q does not contain %q", err, tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), "line") {
+					t.Errorf("error %q does not cite a line number", err)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.block == "" && cfg.Targets[0].VerifyWith != nil {
+				t.Error("a target with no verify_with block must decode to nil, so no container is ever started")
+			}
+		})
+	}
+}
