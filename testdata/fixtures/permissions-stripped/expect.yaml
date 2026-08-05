@@ -1,0 +1,19 @@
+failure_mode: 7
+title: Restores but won't boot — the entrypoint lost its executable bit
+notes: >
+  Every current assertion passes. That is the finding, not a mistake in this
+  file: constat has no assertion that reads a file mode, so this failure mode is
+  presently invisible to it. The fixture is written expecting a clean run so the
+  gap is recorded rather than implied, and it becomes a real test the day a
+  file_mode assertion lands — the expectations here change at that point, and
+  this fixture is what proves the new assertion works.
+target_passes: true
+asserts:
+  - newest_snapshot_age_max: 24h
+  - path_exists: bin/entrypoint.sh
+  - file_count_min:
+      min: 1
+      path: bin
+  - newest_file_age_max:
+      max_age: 24h
+verdicts: [pass, pass, pass, pass]

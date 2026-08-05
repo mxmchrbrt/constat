@@ -1,0 +1,16 @@
+failure_mode: 4
+title: Corruption at rest — a pack file was truncated after the fact
+notes: >
+  The snapshot metadata is intact, so the repository lists a recent snapshot and
+  looks healthy from the outside. The restore is what fails.
+
+  Only one verdict line is expected even though two assertions are configured:
+  the restore runs before any assertion and the target stops when it fails, so
+  the metadata check never gets to report. That is intended — there is nothing
+  to assert against without a restored tree — but it does mean a corrupt
+  repository masks whatever else the target would have said.
+target_passes: false
+asserts:
+  - newest_snapshot_age_max: 24h
+  - path_exists: config.php
+verdicts: [error]

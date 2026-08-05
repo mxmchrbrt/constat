@@ -1,0 +1,19 @@
+failure_mode: 2
+title: Coverage drift — uploads/ was never added to the include list
+notes: >
+  The backup is fresh and internally healthy, which is exactly why this is
+  dangerous: every age check passes. Only an assertion that names the missing
+  directory finds it, and that is the argument for writing assertions per
+  application rather than shipping one generic check.
+target_passes: false
+asserts:
+  - newest_snapshot_age_max: 24h
+  - path_exists: config.php
+  - file_count_min:
+      min: 3
+      path: files
+  - path_exists: uploads
+  - file_count_min:
+      min: 1
+      path: uploads
+verdicts: [pass, pass, pass, fail, fail]

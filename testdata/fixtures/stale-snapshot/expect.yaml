@@ -1,0 +1,17 @@
+failure_mode: 1
+title: Silent non-execution — the job stopped running in May
+notes: >
+  Both age checks fail and both content checks pass, because nothing is missing
+  or corrupt: the backup is simply months old. The file-side check failing
+  alongside the snapshot-side one is what distinguishes this from a repository
+  that is merely idle.
+target_passes: false
+asserts:
+  - newest_snapshot_age_max: 24h
+  - path_exists: config.php
+  - file_count_min:
+      min: 3
+      path: files
+  - newest_file_age_max:
+      max_age: 24h
+verdicts: [fail, pass, pass, fail]

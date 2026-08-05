@@ -1,0 +1,15 @@
+failure_mode: 0
+title: Healthy backup, the control fixture
+notes: >
+  No breakage. Exists so the corpus can catch an assertion that fails against
+  everything, which a corpus of broken fixtures alone cannot detect.
+target_passes: true
+asserts:
+  - newest_snapshot_age_max: 24h
+  - path_exists: config.php
+  - file_count_min:
+      min: 3
+      path: files
+  - newest_file_age_max:
+      max_age: 24h
+verdicts: [pass, pass, pass, pass]
