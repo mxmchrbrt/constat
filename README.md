@@ -1,5 +1,9 @@
 # constat
 
+[![CI](https://github.com/mxmchrbrt/constat/actions/workflows/ci.yml/badge.svg)](https://github.com/mxmchrbrt/constat/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/mxmchrbrt/constat.svg)](https://pkg.go.dev/github.com/mxmchrbrt/constat)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
+
 Prove your backups actually restore. constat takes an existing restic
 repository, restores it into a disposable environment, runs assertions
 against the result, and emits a signed, dated report — then alerts if

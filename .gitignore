@@ -10,6 +10,9 @@
 /cmd/constat/constat
 /constat
 
+# goreleaser build output
+/dist/
+
 # Test binary, built with `go test -c`
 *.test
 
