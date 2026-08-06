@@ -12,25 +12,17 @@ import (
 type Config struct {
 	Targets []Target `yaml:"targets"`
 
-	// Webhook, when set, is posted the run's report on completion — pass and
-	// fail both, so an operator watching a dashboard sees the check ran at
-	// all, not only that it once failed. Top-level rather than per-target: a
-	// signed report is one run's outcome, and alerting is about that run, not
-	// about any single target inside it.
+	// Posted the run's report on completion, pass and fail both. Top-level
+	// rather than per-target: alerting is about the run, not one target.
 	Webhook *Webhook `yaml:"webhook"`
 
-	// Signing, when set, signs the report. Optional deliberately: an unsigned
-	// report is a legitimate output for an operator who just wants to know
-	// whether their backup restores, and requiring key management to get that
-	// answer would put the useful part behind the ceremonial one.
+	// Signs the report when set. Optional: an unsigned report is a
+	// legitimate output for an operator who just wants a pass/fail answer.
 	Signing *Signing `yaml:"signing"`
 }
 
-// Signing names the ed25519 private key used to sign reports.
-//
-// A path, never the key itself. A key pasted into a config file is a key in
-// every backup of that config, in the operator's editor history, and one
-// mis-scoped file permission away from being public.
+// Signing names the ed25519 private key used to sign reports — a path, never
+// the key itself.
 type Signing struct {
 	KeyFile string `yaml:"key_file"`
 }
@@ -41,20 +33,16 @@ type Target struct {
 	Restore Restore     `yaml:"restore"`
 	Assert  []yaml.Node `yaml:"assert"`
 
-	// VerifyWith describes the disposable database the restored dump is loaded
-	// into. Required only when an assertion needs a database; a target that
-	// only checks files never starts a container.
+	// The disposable database the restored dump is loaded into. Required
+	// only when an assertion needs one.
 	VerifyWith *VerifyWith `yaml:"verify_with"`
 
-	// Timeout bounds the whole target: restore plus every assertion. Zero
-	// means DefaultTimeout. A hung restic must not hang the run — failure
-	// mode #10 is about time.
+	// Bounds the whole target: restore plus every assertion. Zero means
+	// DefaultTimeout.
 	Timeout time.Duration `yaml:"timeout"`
 }
 
-// DefaultTimeout applies when a target sets no timeout. Generous enough for a
-// moderate restore, small enough that a 500 GB target forces the operator to
-// set it explicitly and therefore to think about their RTO.
+// DefaultTimeout applies when a target sets no timeout.
 const DefaultTimeout = time.Hour
 
 // EffectiveTimeout is t.Timeout, or DefaultTimeout when unset.
@@ -66,16 +54,13 @@ func (t Target) EffectiveTimeout() time.Duration {
 }
 
 // Webhook mirrors internal/webhook.Config in YAML. Duplicated rather than
-// imported: config stays dependency-free (schema only), which is the same
-// reason internal/run.buildDriver, not config, validates source.kind.
+// imported so config stays dependency-free.
 type Webhook struct {
 	URL string `yaml:"url"`
 
-	// Format selects the payload shape: generic (default), ntfy, healthchecks,
-	// or discord. Left unvalidated here, same as source.kind: config has no
-	// dependency on internal/webhook, so it cannot know which formats exist.
-	// An unrecognised format is caught where the webhook is actually sent
-	// (cmd/constat/main.go), the same place unknown source kinds are caught.
+	// generic (default), ntfy, healthchecks, or discord. Unvalidated here,
+	// like source.kind — config has no dependency on internal/webhook, so an
+	// unrecognised format is caught where the webhook is actually sent.
 	Format string `yaml:"format"`
 
 	Timeout     time.Duration `yaml:"timeout"`
@@ -89,36 +74,30 @@ type Source struct {
 }
 
 type Restore struct {
-	// Paths filters what comes out of the repository (restic --include
-	// semantics: prefix match against paths inside the snapshot).
+	// restic --include semantics: prefix match against paths inside the
+	// snapshot.
 	Paths []string `yaml:"paths"`
 
-	// StripPrefix is the directory, as recorded in the backup, that assertion
-	// paths should be written relative to. Backups store absolute paths and a
-	// restore reproduces them, so a snapshot of /home/app/data lands at
-	// <restoredir>/home/app/data and every assertion would otherwise have to
-	// repeat that prefix. Set it once here and write `path_exists: config.php`.
+	// The directory, as recorded in the backup, that assertion paths are
+	// written relative to. Backups store absolute paths and a restore
+	// reproduces them verbatim, so this saves every assertion from repeating
+	// the full original path.
 	//
-	// Deliberately not inferred from the snapshot: a snapshot can cover two
-	// unrelated paths, and guessing wrong would move the root of every
-	// assertion silently. A prefix that is not in the restored tree is an
-	// error, not a failed verification.
+	// Not inferred from the snapshot: a snapshot can cover two unrelated
+	// paths, and a wrong guess would move every assertion's root silently.
+	// A prefix not in the restored tree is an error, not a failed
+	// verification.
 	StripPrefix string `yaml:"strip_prefix"`
 }
 
-// VerifyWith is the disposable environment a dump is restored into. Proving a
-// dump loads is the difference between this tool and a checksum: `restic check`
-// can tell you the bytes are intact, and nothing but a real load tells you the
-// database comes back.
+// VerifyWith is the disposable database a dump is restored into.
 type VerifyWith struct {
-	// Image is the container image, e.g. postgres:16-alpine. Its version is
-	// half of the version-mismatch check (taxonomy #9): a dump taken from 16
-	// and loaded into 15 fails here, which is the only place it ever surfaces.
+	// e.g. postgres:16-alpine. Its version is half of the version-mismatch
+	// check (taxonomy #9).
 	Image string `yaml:"image"`
 
-	// Load is the dump file, relative to the assertion root — so relative to
-	// restore.strip_prefix when that is set. Streamed into the container on
-	// stdin, so the container needs no mounts.
+	// The dump file, relative to the assertion root. Streamed to the
+	// container on stdin, so it needs no mounts.
 	Load string `yaml:"load"`
 }
 

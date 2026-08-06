@@ -18,9 +18,8 @@ const (
 	pgDatabase = "constat"
 	pgPort     = "5432"
 
-	// Bounds on a container fed data from a backup that is under suspicion.
-	// Generous enough for a real dump, small enough that a runaway cannot take
-	// the host with it.
+	// Bounds on a container fed data from a backup under suspicion: generous
+	// enough for a real dump, small enough a runaway cannot take the host.
 	pgMemoryLimit = "512m"
 	pgPidsLimit   = "512"
 )
@@ -33,10 +32,9 @@ type Postgres struct {
 	DB *sql.DB
 }
 
-// LoadError means the dump itself would not load. It is deliberately a distinct
-// type: a dump that will not load is the failure being hunted — taxonomy #9
-// (Postgres 16 dump into 15) and #4 (corruption) both surface exactly here — so
-// the runner reports it as a FAILED VERIFICATION, not as a broken tool run.
+// LoadError means the dump itself would not load — a distinct type so the
+// runner reports it as a failed verification (taxonomy #9, #4), not a
+// broken tool run.
 type LoadError struct {
 	Path string
 	Err  error
@@ -48,14 +46,12 @@ func (e *LoadError) Unwrap() error { return e.Err }
 // StartPostgres brings up a Postgres container, waits for it to accept
 // connections, and loads dumpPath into it.
 //
-// The returned *Postgres is non-nil whenever a container was started, including
-// when loading failed, so the caller can always defer Close and so a LoadError
-// does not leave a container running.
+// The returned *Postgres is non-nil whenever a container was started,
+// including when loading failed, so the caller can always defer Close.
 func StartPostgres(ctx context.Context, rt *Runtime, image, dumpPath string) (*Postgres, error) {
-	// A throwaway credential for a container that lives seconds and listens on
-	// loopback only. Generated per run rather than fixed so that two concurrent
-	// runs cannot reach each other's database, and passed via --env-file rather
-	// than -e so it never appears in ps output.
+	// A throwaway credential, generated per run so two concurrent runs
+	// cannot reach each other's database, passed via --env-file so it never
+	// appears in `ps`.
 	secret := make([]byte, 24)
 	if _, err := rand.Read(secret); err != nil {
 		return nil, fmt.Errorf("generating database credential: %w", err)
@@ -91,32 +87,26 @@ func StartPostgres(ctx context.Context, rt *Runtime, image, dumpPath string) (*P
 	}
 
 	if err := p.load(ctx, dumpPath); err != nil {
-		// Deliberately not Close()d here: the caller defers Close, and the
-		// container must stay reachable long enough for nothing — but the
-		// handle must be returned so that deferred Close actually runs.
 		return p, err
 	}
 
 	return p, nil
 }
 
-// waitForPostgres polls until the database accepts a connection. A loop rather
-// than a fixed sleep: the image starts a temporary server during
-// initialisation and restarts it, so any single sleep is either flaky or slow.
-// The host-side port only accepts connections after that final restart, which
-// is what makes polling it reliable.
+// waitForPostgres polls until the database accepts a connection. A loop
+// rather than a fixed sleep: the image restarts its server once during
+// initialisation, and only the final restart accepts connections.
 func waitForPostgres(ctx context.Context, hostPort, password string) (*sql.DB, error) {
 	dsn := fmt.Sprintf("postgres://%s:%s@127.0.0.1:%s/%s?sslmode=disable",
 		pgUser, password, hostPort, pgDatabase)
 
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
-		// Never wrapped with the DSN: it carries the password.
 		return nil, fmt.Errorf("opening database connection: %w", redactDSN(err, password))
 	}
 
-	// One connection is all any assertion needs, and it keeps the container's
-	// process count predictable under --pids-limit.
+	// One connection is all any assertion needs, and keeps the process
+	// count predictable under --pids-limit.
 	db.SetMaxOpenConns(1)
 
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -142,13 +132,10 @@ func waitForPostgres(ctx context.Context, hostPort, password string) (*sql.DB, e
 	}
 }
 
-// checkDumpVersion refuses a dump that is newer than the server before psql
-// gets a chance to fail confusingly at it. Reported as a LoadError, because a
-// dump that cannot be loaded into the operator's own image is a verdict about
-// the backup — taxonomy #9 — not a broken run.
-//
-// Silent when the dump carries no readable version header: the check improves
-// the message where it can and never blocks a load it does not understand.
+// checkDumpVersion refuses a dump newer than the server before psql fails
+// confusingly at it, reported as a LoadError (taxonomy #9). Silent when the
+// dump has no readable version header — it improves the message where it
+// can, and never blocks a load it does not understand.
 func (p *Postgres) checkDumpVersion(ctx context.Context, dumpPath string) error {
 	f, err := os.Open(dumpPath)
 	if err != nil {
@@ -163,8 +150,8 @@ func (p *Postgres) checkDumpVersion(ctx context.Context, dumpPath string) error 
 
 	serverVersion, err := p.ServerVersion(ctx)
 	if err != nil {
-		// Not fatal: this check is a courtesy, and psql will still report the
-		// mismatch in its own words if there is one.
+		// Not fatal: a courtesy check; psql reports the mismatch itself if
+		// there is one.
 		return nil
 	}
 
@@ -174,15 +161,12 @@ func (p *Postgres) checkDumpVersion(ctx context.Context, dumpPath string) error 
 	return nil
 }
 
-// load streams the dump into psql inside the container.
+// load streams the dump into psql inside the container, piped to stdin so
+// the container needs no mounts.
 //
-// Piped to stdin rather than mounted: the container then needs no mounts at
-// all, which is one less way for it to reach the host.
-//
-// ON_ERROR_STOP=1 is not optional. Without it psql reports success after
-// printing errors for every failed statement, which would make a corrupt or
-// version-mismatched dump verify clean — the exact shape of failure this tool
-// exists to prevent.
+// ON_ERROR_STOP=1 is not optional: without it psql reports success after
+// printing errors for every failed statement, so a corrupt or
+// version-mismatched dump would verify clean.
 func (p *Postgres) load(ctx context.Context, dumpPath string) error {
 	f, err := os.Open(dumpPath)
 	if err != nil {
@@ -204,8 +188,7 @@ func (p *Postgres) load(ctx context.Context, dumpPath string) error {
 	return nil
 }
 
-// ServerVersion reports the version of the running server, for the version
-// mismatch check in session 8 and for messages.
+// ServerVersion reports the running server's version.
 func (p *Postgres) ServerVersion(ctx context.Context) (string, error) {
 	var v string
 	if err := p.DB.QueryRowContext(ctx, "SHOW server_version").Scan(&v); err != nil {
@@ -215,7 +198,7 @@ func (p *Postgres) ServerVersion(ctx context.Context) (string, error) {
 }
 
 // Close closes the connection and removes the container. Safe on a nil
-// receiver and safe to call twice, so callers defer it unconditionally.
+// receiver and safe to call twice.
 func (p *Postgres) Close() {
 	if p == nil {
 		return
@@ -227,9 +210,8 @@ func (p *Postgres) Close() {
 	p.container.Stop()
 }
 
-// redactDSN keeps a generated password out of anything that reaches a log, a
-// report, or stdout. The password is random and short-lived, but a tool whose
-// promise is evidence must not be the thing that prints credentials.
+// redactDSN keeps a generated password out of anything that reaches a log,
+// a report, or stdout.
 func redactDSN(err error, password string) error {
 	if err == nil {
 		return nil

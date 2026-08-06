@@ -1,16 +1,13 @@
 // Package container runs the disposable database container that a dump is
 // restored into, and guarantees it goes away again.
 //
-// Shelling out to the docker CLI rather than taking the Docker SDK, per the
-// decision already recorded: shelling out is honest, keeps the single static
-// binary, and works unchanged against podman.
+// Shells out to the docker CLI rather than the Docker SDK, so it works
+// unchanged against podman and keeps constat a single static binary.
 //
-// The container is fed data that came out of a customer's backup. That backup
-// is the thing under suspicion — it may be corrupt, it may be attacker-supplied
-// after a compromise, and "restore brings the malware back" is failure mode #11
-// in its own right. So the container is treated as hostile: no host network, a
-// port published only on loopback, a memory and process cap, no new privileges,
-// and no mounts at all.
+// The container is fed data from a customer's backup, which is itself under
+// suspicion (corrupt, or attacker-supplied after a compromise), so it is
+// treated as hostile: no host network, loopback-only published port, memory
+// and process caps, no new privileges, no mounts.
 package container
 
 import (
@@ -27,19 +24,16 @@ import (
 )
 
 // Runtime is the container CLI in use. docker is preferred when both are
-// present, because a machine with both usually means docker is the configured
-// one; podman is a drop-in for everything used here.
+// present; podman is a drop-in for everything used here.
 type Runtime struct {
 	bin string
 }
 
-// ErrNoRuntime means neither docker nor podman is usable. Callers surface this
-// as an error rather than skipping the check: a verification that silently
-// declines to verify is worse than no verification.
+// ErrNoRuntime means neither docker nor podman is usable.
 var ErrNoRuntime = errors.New("no container runtime found: install docker or podman")
 
-// DetectRuntime finds a usable container CLI. Presence on PATH is not enough —
-// a docker binary with no reachable daemon is the common broken case — so the
+// DetectRuntime finds a usable container CLI. Presence on PATH is not
+// enough — a docker binary with no reachable daemon is common — so the
 // daemon is probed too.
 func DetectRuntime(ctx context.Context) (*Runtime, error) {
 	var tried []string
@@ -68,14 +62,10 @@ func (r *Runtime) command(ctx context.Context, args ...string) *exec.Cmd {
 	return exec.CommandContext(ctx, r.bin, args...)
 }
 
-// run executes a subcommand and returns its standard output, always carrying
-// both streams into the error: `exit status 1` alone throws away the useful
-// half.
-//
-// stdout and stderr are kept apart rather than combined because the return
-// value gets parsed. The docker-shim wrapper around podman, for one, prints an
-// advisory banner on stderr for every invocation, and combining the two means
-// parsing whatever a runtime feels like announcing.
+// run executes a subcommand and returns its standard output. stdout and
+// stderr are kept apart because the return value gets parsed, and podman's
+// docker-shim wrapper prints an advisory banner on stderr for every
+// invocation.
 func (r *Runtime) run(ctx context.Context, args ...string) (string, error) {
 	cmd := r.command(ctx, args...)
 	var stdout, stderr bytes.Buffer
@@ -89,17 +79,16 @@ func (r *Runtime) run(ctx context.Context, args ...string) (string, error) {
 	return stdout.String(), nil
 }
 
-// Spec describes a container to start. Deliberately narrow: everything here is
-// either required to make the database reachable or required to keep it caged.
+// Spec describes a container to start. Everything here is either required to
+// make the database reachable or required to keep it caged.
 type Spec struct {
 	Image string
 
-	// Env is written to a file mode 0600 and passed with --env-file. Never as
-	// -e on the command line, where it would be visible in ps output to every
-	// user on the host.
+	// Written to a file mode 0600 and passed with --env-file, never -e on the
+	// command line, where it would show in `ps` to every user on the host.
 	Env map[string]string
 
-	// ContainerPort is published to a kernel-assigned port on 127.0.0.1 only.
+	// Published to a kernel-assigned port on 127.0.0.1 only.
 	ContainerPort string
 
 	MemoryLimit string
@@ -116,32 +105,18 @@ type Container struct {
 	HostPort string
 }
 
-// startAttempts bounds how many times Start will retry a container that
-// failed to come up.
-//
-// The failure this exists for is port allocation. The published port is
-// kernel-assigned, and between the kernel choosing it and the runtime binding
-// it, something else on the host can take it — rootless podman's pasta
-// networking reports this as "Failed to bind port N". It is rare, it is
-// transient, and a fresh attempt gets a different port.
-//
-// Retrying is worth it because the alternative is a spurious ERROR verdict on
-// a backup that is fine. constat classifies that correctly — the tool could
-// not run, rather than the backup being broken — but an operator woken by it
-// still has to work that out, and alert fatigue is how real failures get
-// ignored.
-//
-// Three, not more: a port collision that survives three fresh ports is not a
-// collision, it is something that will not fix itself by waiting.
+// startAttempts bounds retries of a container that failed to come up. The
+// published port is kernel-assigned, and something else on the host can win
+// the race for it before the runtime binds — retried with a fresh port
+// rather than failing the whole run over a transient collision.
 const startAttempts = 3
 
 // Start runs the container detached and returns a handle. The handle is
-// returned even on some failure paths precisely so the caller can always defer
-// Stop; when the returned handle is nil there is nothing to clean up.
+// returned even on failure paths so the caller can always defer Stop.
 //
 // A transient port-binding failure is retried with a completely fresh
-// container — new name, new scratch directory, new kernel-assigned port — and
-// the failed attempt is torn down before the next one begins.
+// container (new name, scratch directory, and port); the failed attempt is
+// torn down first.
 func (r *Runtime) Start(ctx context.Context, spec Spec) (*Container, error) {
 	var lastErr error
 
@@ -159,15 +134,13 @@ func (r *Runtime) Start(ctx context.Context, spec Spec) (*Container, error) {
 		if !retryablePortFailure(err) {
 			return nil, err
 		}
-		// startOnce has already cleaned up its own failed attempt.
 	}
 
 	return nil, fmt.Errorf("container did not start after %d attempts: %w", startAttempts, lastErr)
 }
 
-// startOnce is one complete attempt: its own name, its own scratch directory,
-// its own port. On any failure it removes whatever it created before
-// returning, so a retry never inherits state from the attempt before it.
+// startOnce is one complete attempt. On any failure it removes whatever it
+// created, so a retry never inherits state from the attempt before it.
 func (r *Runtime) startOnce(ctx context.Context, spec Spec) (*Container, error) {
 	suffix := make([]byte, 6)
 	if _, err := rand.Read(suffix); err != nil {
@@ -201,8 +174,8 @@ func (r *Runtime) startOnce(ctx context.Context, spec Spec) (*Container, error) 
 		"--name", name,
 		"--rm",
 		"--env-file", envFile,
-		// Kernel-assigned host port, bound to loopback. Never --network host:
-		// the container must not see the host's network at all.
+		// Never --network host: the container must not see the host's
+		// network at all.
 		"--publish", "127.0.0.1::" + spec.ContainerPort,
 		"--security-opt", "no-new-privileges",
 	}
@@ -215,8 +188,6 @@ func (r *Runtime) startOnce(ctx context.Context, spec Spec) (*Container, error) 
 	args = append(args, spec.Image)
 
 	if _, err := r.run(ctx, args...); err != nil {
-		// The container may or may not exist depending on where run failed;
-		// Stop tolerates both.
 		c.Stop()
 		return nil, err
 	}
@@ -232,13 +203,9 @@ func (r *Runtime) startOnce(ctx context.Context, spec Spec) (*Container, error) 
 }
 
 // retryablePortFailure reports whether err looks like the host losing a race
-// for the port the kernel just handed out.
-//
-// Matching on message text, which is unpleasant and is the price of shelling
-// out to a CLI rather than linking a library — there is no error code to read.
-// Kept deliberately narrow: matching too broadly would retry a missing image
-// or a broken daemon three times over, turning a fast, clear failure into a
-// slow one.
+// for the port the kernel just handed out. Matched on message text — there
+// is no error code to read from a CLI — and kept narrow, since matching
+// broadly would retry a missing image or a broken daemon three times over.
 func retryablePortFailure(err error) bool {
 	if err == nil {
 		return false
@@ -257,8 +224,8 @@ func retryablePortFailure(err error) bool {
 	return false
 }
 
-// publishedPort asks the runtime which loopback port the container port landed
-// on. Parsed rather than assumed, because the kernel assigns it.
+// publishedPort asks the runtime which loopback port the container port
+// landed on, since the kernel assigns it.
 func (c *Container) publishedPort(ctx context.Context, containerPort string) (string, error) {
 	out, err := c.rt.run(ctx, "port", c.name, containerPort+"/tcp")
 	if err != nil {
@@ -277,22 +244,17 @@ func (c *Container) publishedPort(ctx context.Context, containerPort string) (st
 // Name reports the container's generated name.
 func (c *Container) Name() string { return c.name }
 
-// Stop removes the container and its scratch directory. Safe to call more than
-// once and on a container that never started, so callers can defer it
-// unconditionally.
+// Stop removes the container and its scratch directory. Safe to call more
+// than once and on a container that never started.
 //
-// Deliberately does not take the caller's context: it runs on the cleanup path,
-// which is reached precisely when that context has been cancelled or has timed
-// out. A teardown that inherits a cancelled context does not tear anything
-// down, and leaving a container holding restored customer data alive is a
-// worse outcome than a slow exit.
+// Does not take the caller's context: it runs on the cleanup path, reached
+// precisely when that context is cancelled or timed out, and a teardown
+// bound to a cancelled context would tear nothing down.
 func (c *Container) Stop() {
 	if c == nil {
 		return
 	}
 	if c.name != "" {
-		// --rm removes it on normal exit; this covers every other path, and
-		// force is what makes it certain rather than likely.
 		_ = c.rt.command(context.Background(), "rm", "--force", "--volumes", c.name).Run()
 	}
 	if c.dir != "" {
@@ -301,7 +263,7 @@ func (c *Container) Stop() {
 	}
 }
 
-// ExecStdin runs a command inside the container with r piped to its stdin, and
+// ExecStdin runs a command inside the container with stdin piped to it, and
 // returns its combined output.
 func (c *Container) ExecStdin(ctx context.Context, stdin *os.File, args ...string) (string, error) {
 	full := append([]string{"exec", "--interactive", c.name}, args...)

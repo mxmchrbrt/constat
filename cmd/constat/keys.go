@@ -11,13 +11,9 @@ import (
 	"github.com/mxmchrbrt/constat/internal/signing"
 )
 
-// keygen writes a new ed25519 keypair.
-//
-// A separate subcommand rather than something the run does on demand: a
-// verification job that quietly generates a key when it cannot find one would
-// produce reports signed by a key nobody has ever seen, and every one of them
-// would verify against a public half that exists only on that host. Key
-// creation is a deliberate act.
+// keygen writes a new ed25519 keypair. A deliberate subcommand rather than
+// something a run does on demand — a job that silently generates a key would
+// produce reports signed by a key nobody has seen.
 func keygen(args []string) int {
 	fs := flag.NewFlagSet("keygen", flag.ExitOnError)
 	out := fs.String("out", "", "path for the private key; the public key is written alongside with a .pub suffix")
@@ -72,12 +68,8 @@ func keygen(args []string) int {
 	return 0
 }
 
-// verify checks a written report against a public key.
-//
-// Exists because evidence nobody can check is not evidence. The person who
-// needs to verify a report — an auditor, a customer, someone six months after
-// the fact — should not need constat's config, the repository, or anything
-// secret. A report file and a public key is the whole input.
+// verify checks a written report against a public key. Its whole input is a
+// report file and a public key — no config, no repository, nothing secret.
 func verify(args []string) int {
 	fs := flag.NewFlagSet("verify", flag.ExitOnError)
 	keyPath := fs.String("key", "", "path to the public key to verify against")

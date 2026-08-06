@@ -17,20 +17,18 @@ func init() {
 
 // mtimeSkewTolerance is how far a restored file's mtime may sit ahead of the
 // snapshot's own timestamp before the restore is treated as untrustworthy
-// rather than fresh. A file written while the backup was still running can
-// legitimately be slightly newer than the time stamped when the snapshot
-// started; minutes of it cannot.
+// rather than fresh — a file written while the backup was still running can
+// legitimately be a little newer than the snapshot start.
 const mtimeSkewTolerance = 5 * time.Minute
 
 // newest_file_age_max catches taxonomy #1 on the file side: the backup job
-// still runs and still succeeds, but stopped capturing new data months ago.
-// The snapshot is fresh; the contents are not. That is invisible to
-// newest_snapshot_age_max, which only sees the snapshot.
+// still runs, but stopped capturing new data months ago. The snapshot is
+// fresh; the contents are not — invisible to newest_snapshot_age_max, which
+// only sees the snapshot.
 //
-// Only mtime is used. ctime cannot be: it is set by the kernel whenever an
-// inode changes and no userspace API can restore it, so every restored file
-// carries the restore's own ctime. Measured against restic 0.18.0: mtime
-// survives a backup/restore round trip exactly, ctime does not survive at all.
+// Only mtime is used. ctime cannot be: the kernel sets it on any inode
+// change and no userspace API can restore it, so every restored file
+// carries the restore's own ctime.
 type newestFileAge struct {
 	maxAge time.Duration
 	path   string // cleaned, relative to the restore root
@@ -109,9 +107,9 @@ func (a *newestFileAge) Check(ctx context.Context, env Env) (Result, error) {
 	display := filepath.Join(a.path, newestRel)
 	now := time.Now()
 
-	// Two ways the answer can be untrustworthy rather than merely bad. Both
-	// are errors, never a verdict: this assertion fails towards PASS when
-	// mtimes are wrong, which is the one direction taxonomy #1 cannot afford.
+	// Both errors, never a verdict: this assertion fails towards PASS when
+	// mtimes are wrong (an untrustworthy backend stamps every file at
+	// restore time), which taxonomy #1 cannot afford.
 	if newest.After(now) {
 		return Result{}, fmt.Errorf("newest_file_age_max: restored file %q has an mtime %s in the future (clock skew?)",
 			display, newest.Sub(now).Round(time.Second))
@@ -126,9 +124,8 @@ func (a *newestFileAge) Check(ctx context.Context, env Env) (Result, error) {
 			display, newest.Sub(snap.Time).Round(time.Second), snap.ID)
 	}
 
-	// Rounded to the second before comparing, so a threshold written as 24h
-	// still passes for a file dated exactly 24h ago. Matches
-	// newest_snapshot_age_max.
+	// Rounded to the second so a threshold of 24h still passes a file dated
+	// exactly 24h ago.
 	age := now.Sub(newest).Round(time.Second)
 
 	return Result{

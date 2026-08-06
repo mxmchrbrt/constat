@@ -1,16 +1,9 @@
 // Package webhook posts a run's outcome to an outbound URL — ntfy,
 // Healthchecks.io, Discord, or a generic JSON endpoint.
 //
-// Alerting is the part of the failure taxonomy this tool cannot skip: taxonomy
-// #1, silent non-execution, is only silent because nothing tells anyone the job
-// stopped. A verification with no alert path is a verification nobody reads
-// until it's too late.
-//
-// A failing webhook must never change the run's verdict. The backup is either
-// restorable or it isn't; whether the notification about that fact happened to
-// get through is a separate, lesser fact, and conflating them would mean a
-// transient network blip on the alerting side silently repainting a real
-// failure as a tool error or vice versa.
+// A failing webhook must never change the run's verdict: whether the
+// notification got through is a separate, lesser fact than whether the
+// backup is restorable.
 package webhook
 
 import (
@@ -28,21 +21,18 @@ import (
 	"github.com/mxmchrbrt/constat/internal/report"
 )
 
-// Format selects how the report is rendered for the destination. Kept as a
-// config-level choice rather than sniffed from the URL: sniffing "looks like
-// ntfy.sh" is exactly the kind of guess that's right until the operator
-// self-hosts the same service under their own domain.
+// Format selects how the report is rendered for the destination. A config
+// choice, not sniffed from the URL — "looks like ntfy.sh" breaks the moment
+// an operator self-hosts the same service under their own domain.
 type Format string
 
 const (
-	// Generic posts the full JSON report. The default: it works with any
-	// endpoint that can accept a JSON body (a custom receiver, a SIEM, n8n),
-	// and it's the only format that loses no information.
+	// Generic posts the full JSON report. The default, and the only format
+	// that loses no information.
 	Generic Format = "generic"
 	Ntfy    Format = "ntfy"
 	// Healthchecks pings the URL on pass and the URL with /fail appended on
-	// fail or error, per that service's own protocol — there is nothing to
-	// invent here, just to match.
+	// fail or error, per that service's own check-in protocol.
 	Healthchecks Format = "healthchecks"
 	Discord      Format = "discord"
 )
@@ -52,20 +42,14 @@ type Config struct {
 	URL    string
 	Format Format
 
-	// Timeout bounds a single HTTP attempt. Retries get their own timeout
-	// each; a hung endpoint must not be able to hold the whole run open past
-	// its own configured target timeouts.
+	// Bounds a single HTTP attempt.
 	Timeout time.Duration
 
-	// MaxAttempts bounds total attempts, including the first. 1 disables
-	// retries outright.
+	// Bounds total attempts, including the first. 1 disables retries.
 	MaxAttempts int
 }
 
 // DefaultTimeout and DefaultMaxAttempts apply when Config leaves them zero.
-// Three attempts with a backing-off wait between them rides out a webhook
-// receiver's brief restart without turning a five-minute alert delay into
-// something that outruns the operator's patience.
 const (
 	DefaultTimeout     = 10 * time.Second
 	DefaultMaxAttempts = 3
@@ -85,11 +69,9 @@ func (c Config) effectiveMaxAttempts() int {
 	return c.MaxAttempts
 }
 
-// Send posts r to cfg.URL, retrying transient failures with a bounded backoff.
-//
-// The returned error is informational — send it to stderr, do not let it
-// change an exit code. Verdict and delivery are independent facts; see the
-// package doc.
+// Send posts r to cfg.URL, retrying transient failures with a bounded
+// backoff. The returned error is informational — report it, don't let it
+// change an exit code.
 func Send(ctx context.Context, cfg Config, r report.Report) error {
 	if cfg.URL == "" {
 		return fmt.Errorf("webhook: no URL configured")
@@ -116,8 +98,7 @@ func Send(ctx context.Context, cfg Config, r report.Report) error {
 
 		attemptReq := req.Clone(ctx)
 		if req.Body != nil {
-			// Clone shares the body reader; a retried request needs its own
-			// copy since the first attempt may have consumed it.
+			// Clone shares the body reader; a retry needs its own copy.
 			body, _ := req.GetBody()
 			attemptReq.Body = body
 		}
@@ -131,10 +112,9 @@ func Send(ctx context.Context, cfg Config, r report.Report) error {
 	return fmt.Errorf("webhook: giving up after %d attempt(s): %w", attempts, redactURL(lastErr, cfg.URL))
 }
 
-// attemptOnce sends one request and classifies the response. A non-2xx status
-// is a delivery failure worth retrying; the body of an error response is not
-// read beyond a small cap, since some misconfigured endpoints echo the whole
-// request back and that has no reason to end up in constat's own error message.
+// attemptOnce sends one request. A non-2xx status is treated as a delivery
+// failure worth retrying; the response body is capped since a misconfigured
+// endpoint can echo the whole request back.
 func attemptOnce(client *http.Client, req *http.Request) error {
 	resp, err := client.Do(req)
 	if err != nil {
@@ -149,10 +129,9 @@ func attemptOnce(client *http.Client, req *http.Request) error {
 	return nil
 }
 
-// backoff is the wait before retry attempt n (1-indexed: the wait before the
-// second overall attempt). Fixed steps rather than exponential-with-jitter:
-// three attempts total makes the difference unobservable, and fixed steps are
-// something a reader can verify by inspection instead of trusting a formula.
+// backoff is the wait before retry attempt n (1-indexed). Fixed steps rather
+// than exponential-with-jitter: three attempts makes the difference
+// unobservable, and fixed steps are easy to verify by inspection.
 func backoff(n int) time.Duration {
 	steps := []time.Duration{time.Second, 3 * time.Second, 8 * time.Second}
 	if n-1 < len(steps) {
@@ -161,10 +140,6 @@ func backoff(n int) time.Duration {
 	return steps[len(steps)-1]
 }
 
-// buildRequest renders r for cfg.Format and returns the request to send. Every
-// format's URL is validated with url.Parse before use: a malformed
-// operator-supplied URL must fail loudly and immediately, not turn into a
-// request to some other host via whatever net/http does with a bad string.
 func buildRequest(cfg Config, r report.Report) (*http.Request, error) {
 	switch cfg.Format {
 	case Ntfy:
@@ -203,8 +178,8 @@ func genericRequest(rawURL string, r report.Report) (*http.Request, error) {
 	return newJSONRequest(rawURL, canonical)
 }
 
-// discordRequest posts {"content": "..."} per Discord's webhook API. Content
-// is capped well under Discord's 2000-character limit for a message.
+// discordRequest posts {"content": "..."} per Discord's webhook API, capped
+// under its 2000-character message limit.
 func discordRequest(rawURL string, r report.Report) (*http.Request, error) {
 	body, err := json.Marshal(struct {
 		Content string `json:"content"`
@@ -215,8 +190,8 @@ func discordRequest(rawURL string, r report.Report) (*http.Request, error) {
 	return newJSONRequest(rawURL, body)
 }
 
-// ntfyRequest posts the summary as a plain-text body, per ntfy's simplest
-// publish form: any POST to the topic URL becomes the notification body.
+// ntfyRequest posts the summary as plain text — any POST to an ntfy topic URL
+// becomes the notification body.
 func ntfyRequest(rawURL string, r report.Report) (*http.Request, error) {
 	if _, err := url.ParseRequestURI(rawURL); err != nil {
 		return nil, fmt.Errorf("invalid URL: %w", err)
@@ -241,9 +216,8 @@ func ntfyRequest(rawURL string, r report.Report) (*http.Request, error) {
 	return req, nil
 }
 
-// healthchecksRequest pings the configured URL on pass, and the URL with
-// "/fail" appended on fail or error — Healthchecks.io's own protocol for a
-// manual (non-cron) check-in. Nothing invented here, just matched.
+// healthchecksRequest pings rawURL on pass, and rawURL+"/fail" on fail or
+// error — Healthchecks.io's manual check-in protocol.
 func healthchecksRequest(rawURL string, r report.Report) (*http.Request, error) {
 	target := rawURL
 	if r.Verdict != report.Pass {
@@ -253,7 +227,7 @@ func healthchecksRequest(rawURL string, r report.Report) (*http.Request, error) 
 		return nil, fmt.Errorf("invalid URL: %w", err)
 	}
 
-	body := []byte(summary(r, 10000)) // Healthchecks accepts up to 10KB of body as the check's log.
+	body := []byte(summary(r, 10000)) // Healthchecks accepts up to 10KB as the check's log.
 	req, err := http.NewRequest(http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -265,9 +239,8 @@ func healthchecksRequest(rawURL string, r report.Report) (*http.Request, error) 
 	return req, nil
 }
 
-// summary is the human-readable line-per-target rendering shared by the
-// text-based formats. Capped to n runes so a run with many targets cannot blow
-// past a destination's own body-size limit.
+// summary is the human-readable rendering shared by the text-based formats,
+// capped to n runes so a large run cannot exceed a destination's body limit.
 func summary(r report.Report, n int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "constat: %s on %s (%s)\n", strings.ToUpper(string(r.Verdict)), r.Host, r.GeneratedAt.Format(time.RFC3339))
@@ -287,17 +260,11 @@ func summary(r report.Report, n int) string {
 	return out
 }
 
-// redactURL replaces a webhook error with one that names only the host, not
-// the full URL.
-//
-// This is not decoration — the naive approach of appending a redacted host to
-// err.Error() would still leak, because net/http's own errors are *url.Error,
-// whose Error() method embeds the complete request URL: `Post
-// "https://discord.com/api/webhooks/…/the-actual-token": dial tcp: …`. A
-// webhook URL is operator-controlled and can carry a path segment that is
-// itself the secret — a Discord webhook token, a private ntfy topic — so the
-// underlying error is unwrapped and only its cause is kept; the URL half is
-// discarded outright rather than trusted to redact cleanly.
+// redactURL replaces a webhook error with one naming only the host, not the
+// full URL — a webhook URL can carry its own secret in the path (a Discord
+// token, a private ntfy topic), and net/http's *url.Error embeds the
+// complete request URL in its Error() string, so the cause is unwrapped
+// rather than trusting a string replace to catch it.
 func redactURL(err error, rawURL string) error {
 	if err == nil {
 		return nil

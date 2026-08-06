@@ -16,9 +16,8 @@ var registry = map[string]Factory{}
 //   func init() { Register("newest_snapshot_age_max", newSnapshotAge) }
 
 func Register(name string, f Factory) {
-	_, exists := registry[name]
-	if exists {
-		panic("The name you entered is already in registry.")
+	if _, exists := registry[name]; exists {
+		panic(fmt.Sprintf("assert: %q already registered", name))
 	}
 	registry[name] = f
 }

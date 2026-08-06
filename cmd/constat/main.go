@@ -16,10 +16,8 @@ import (
 	"github.com/mxmchrbrt/constat/internal/webhook"
 )
 
-// version is the release this binary was built from. Recorded in every report,
-// because "which version said this backup was fine" is the first question asked
-// of any evidence that later turns out to be wrong. Set at build time via
-// -ldflags "-X main.version=...".
+// version is the release this binary was built from, recorded in every
+// report. Set at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
 func main() {
@@ -61,14 +59,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// The signing key is loaded before any verification runs, deliberately.
-	// It is cheap, and the alternative is doing an hour of restores and then
-	// discovering the key is missing or group-readable — the run's evidence
-	// lost at the last step, with nothing to re-sign it from.
-	//
-	// A configured-but-unusable key is fatal rather than a fallback to an
-	// unsigned report: an operator who asked for signed evidence and silently
-	// got unsigned output would not find out until someone tried to verify it.
+	// Loaded before any verification runs: an hour of restores followed by
+	// discovering the key is missing loses the run's evidence with nothing
+	// to re-sign it from. A configured-but-unusable key is fatal rather
+	// than a silent fallback to an unsigned report.
 	var signer report.Signer
 	if cfg.Signing != nil {
 		s, err := signing.LoadSigner(cfg.Signing.KeyFile)
@@ -79,16 +73,12 @@ func main() {
 		signer = s
 	}
 
-	// One timestamp for the whole run, taken before any work: every target in
-	// a report should carry the same "as of", and reading the clock per target
-	// would make a long run look like several.
+	// One timestamp for the whole run: every target should carry the same
+	// "as of" rather than reading the clock per target.
 	startedAt := time.Now()
 
 	host, err := os.Hostname()
 	if err != nil {
-		// Not fatal. A report with an unknown host is still evidence; refusing
-		// to verify a backup because the hostname could not be read would be
-		// absurd.
 		host = "unknown"
 	}
 
@@ -120,14 +110,9 @@ func main() {
 		}
 	}
 
-	// Fires on pass and on fail, so a dashboard shows the check ran at all —
-	// taxonomy #1 is silent non-execution, and an alert that only ever fires
-	// on failure cannot distinguish "healthy" from "not running".
-	//
-	// A failing webhook is reported and never changes the exit code: whether
-	// the notification got through is a separate, lesser fact from whether the
-	// backup is restorable, and conflating them would let a network blip on
-	// the alerting side repaint a real failure as a tool error or vice versa.
+	// Fires on pass and on fail (taxonomy #1: an alert that only fires on
+	// failure can't distinguish "healthy" from "not running"). A failing
+	// webhook is reported and never changes the exit code.
 	if cfg.Webhook != nil {
 		if err := sendWebhook(ctx, *cfg.Webhook, rep); err != nil {
 			fmt.Fprintf(os.Stderr, "webhook: %v\n", err)
@@ -147,9 +132,6 @@ func sendWebhook(ctx context.Context, cfg config.Webhook, rep report.Report) err
 	case webhook.Generic, webhook.Ntfy, webhook.Healthchecks, webhook.Discord:
 		// known
 	default:
-		// Unknown formats are caught here rather than at config load, same as
-		// an unknown source.kind: config has no dependency on this package and
-		// cannot know which formats exist.
 		return fmt.Errorf("unknown webhook format %q", cfg.Format)
 	}
 

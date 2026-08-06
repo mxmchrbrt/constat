@@ -14,13 +14,10 @@ func init() {
 	Register("query_newer_than", newQueryNewerThan)
 }
 
-// query_newer_than catches taxonomy #1 inside the database, which is the
-// version of silent non-execution that every other check misses: the backup job
-// runs nightly, the dump loads without a complaint, and the newest row in it is
-// from March.
-//
-// newest_snapshot_age_max sees a fresh snapshot. newest_file_age_max sees a
-// freshly written dump file. Only reading the data finds this.
+// query_newer_than catches taxonomy #1 inside the database: the backup job
+// runs nightly, the dump loads without complaint, and the newest row in it
+// is from March. Only reading the data finds this — a fresh snapshot and a
+// freshly written dump file both look healthy.
 type queryNewerThan struct {
 	query     string
 	newerThan time.Duration
@@ -71,10 +68,9 @@ func (a *queryNewerThan) Check(ctx context.Context, env Env) (Result, error) {
 		return Result{}, fmt.Errorf("query_newer_than: %w", err)
 	}
 
-	// NULL is how MAX() answers over an empty table, and no rows is how a
-	// LIMIT 1 query answers the same question — both mean there is nothing to
-	// date. The author's call, consistent with session 5: nothing captured at
-	// all is a verdict about the backup, not a malfunction of the check.
+	// NULL (MAX over an empty table) and no rows (a LIMIT 1 with nothing to
+	// return) both mean nothing to date — a verdict about the backup, not a
+	// malfunction of the check.
 	if noRows || !newest.Valid {
 		return Result{
 			Name:     "query_newer_than",
@@ -86,9 +82,6 @@ func (a *queryNewerThan) Check(ctx context.Context, env Env) (Result, error) {
 
 	now := time.Now()
 	if newest.Time.After(now) {
-		// Same call as newest_snapshot_age_max and newest_file_age_max: a
-		// future timestamp means the answer cannot be trusted, and an
-		// untrustworthy answer must never read as a pass.
 		return Result{}, fmt.Errorf("query_newer_than: newest row is dated %s in the future (clock skew?)",
 			newest.Time.Sub(now).Round(time.Second))
 	}

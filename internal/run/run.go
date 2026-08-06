@@ -62,17 +62,16 @@ func buildAssertions(nodes []yaml.Node) ([]assert.Assertion, error) {
 }
 
 // restoreInto creates a disposable directory, restores the target's snapshot
-// into it, and returns the directory plus a cleanup func. The cleanup func is
-// returned even when the restore fails, so the caller can always defer it
-// without checking the error first.
+// into it, and returns the directory plus a cleanup func. cleanup is
+// returned even when the restore fails, so the caller can always defer it.
 func restoreInto(ctx context.Context, d driver.Driver, t config.Target) (dir string, elapsed time.Duration, cleanup func(), err error) {
 	dir, err = os.MkdirTemp("", "constat-restore-")
 	if err != nil {
 		return "", 0, func() {}, fmt.Errorf("creating restore directory: %w", err)
 	}
 
-	// MkdirTemp already creates 0700, but the restored tree carries customer
-	// data and this is cheap to make explicit rather than inherited.
+	// MkdirTemp already creates 0700; explicit rather than inherited, since
+	// the restored tree carries customer data.
 	if err := os.Chmod(dir, 0o700); err != nil {
 		os.RemoveAll(dir)
 		return "", 0, func() {}, fmt.Errorf("securing restore directory: %w", err)
@@ -90,11 +89,10 @@ func restoreInto(ctx context.Context, d driver.Driver, t config.Target) (dir str
 // assertionRoot is the directory assertion paths are resolved against: the
 // restore directory itself, or the subdirectory named by restore.strip_prefix.
 //
-// Every failure here is an error rather than a verdict, deliberately. A prefix
-// that is not in the restored tree means the config is wrong, and the shape
-// that has to be avoided is the one where a mistyped prefix roots every
-// assertion at an empty directory and the target reports a long list of
-// convincing failures about a backup that is fine.
+// Every failure here is an error rather than a verdict: a prefix not present
+// in the restored tree means the config is wrong, and a mistyped prefix must
+// not silently root every assertion at an empty directory and report a
+// convincing wall of failures about a backup that is fine.
 func assertionRoot(restoreDir, stripPrefix string) (string, error) {
 	if stripPrefix == "" {
 		return restoreDir, nil
@@ -128,14 +126,13 @@ func assertionRoot(restoreDir, stripPrefix string) (string, error) {
 // path without uninstalling docker.
 var newRuntime = container.DetectRuntime
 
-// openDatabase brings up the target's verify_with container and loads the dump
-// out of the restored tree into it.
+// openDatabase brings up the target's verify_with container and loads the
+// dump out of the restored tree into it.
 //
-// The two error returns are deliberately separate rather than one error the
-// caller inspects. A dump that will not load is a verdict about the backup; a
-// missing container runtime is a broken run. Collapsing them would mean either
-// alerting on the operator's typo or staying quiet about a dump that cannot be
-// restored, and both are wrong in ways that matter.
+// loadFailed and err are separate: a dump that will not load is a verdict
+// about the backup, while a missing container runtime is a broken run.
+// Collapsing them means alerting on a typo or staying quiet about a backup
+// that cannot be restored.
 //
 // The returned *container.Postgres is safe to Close on every path, including
 // when it is nil.
@@ -149,8 +146,8 @@ func openDatabase(ctx context.Context, t config.Target, restoreDir string) (db *
 		return nil, nil, fmt.Errorf("resolving verify_with.load %q: %w", t.VerifyWith.Load, err)
 	}
 	if !found {
-		// A dump that is not in the backup at all is a verdict, not a broken
-		// run: that is failure mode #2 with a database attached.
+		// A dump not in the backup at all is a verdict (taxonomy #2 with a
+		// database attached), not a broken run.
 		return nil, fmt.Errorf("dump %q is not in the restored tree", t.VerifyWith.Load), nil
 	}
 
@@ -171,18 +168,14 @@ func openDatabase(ctx context.Context, t config.Target, restoreDir string) (db *
 }
 
 // Target builds the driver and assertions for t, restores if any assertion
-// needs files, runs every assertion, and reports PASS/FAIL/ERROR per assertion
-// to stdout. One broken assertion does not stop the others.
+// needs files, runs every assertion, and reports PASS/FAIL/ERROR per
+// assertion to stdout. One broken assertion does not stop the others.
 //
-// Returns the structured outcome as well as printing it. Both are needed and
-// neither replaces the other: the printing is what an operator watching a
-// terminal sees, and the returned value is what becomes the signed report.
-// Deriving one from the other — parsing stdout, or silencing it — would make
-// the evidence and the operator's view able to disagree.
+// Returns the structured outcome as well as printing it, so the operator's
+// terminal and the signed report are always produced from the same values
+// rather than one being derived from the other.
 //
-// The restore directory is always removed, including on the error and panic
-// paths: a verification tool that leaves scratch space behind after an
-// interrupt is its own bug report.
+// The restore directory is always removed, including on the error path.
 func Target(ctx context.Context, t config.Target) report.Target {
 	ctx, cancel := context.WithTimeout(ctx, t.EffectiveTimeout())
 	defer cancel()
@@ -195,8 +188,7 @@ func Target(ctx context.Context, t config.Target) report.Target {
 		Assertions: []report.Assertion{},
 	}
 
-	// fail records a whole-target outcome that stops the run: there is nothing
-	// left to check once the driver, the restore, or the config is broken.
+	// fail records a whole-target outcome that stops the run.
 	fail := func(verdict report.Verdict, name string, err error) report.Target {
 		label := "ERROR"
 		if verdict == report.Fail {
@@ -244,21 +236,16 @@ func Target(ctx context.Context, t config.Target) report.Target {
 
 	if assert.AnyRequiresDatabase(assertions) {
 		db, loadFailed, err := openDatabase(ctx, t, env.RestoreDir)
-		// Deferred before the error is inspected, deliberately: openDatabase
-		// returns a non-nil handle whenever a container was started, including
-		// on the paths where it then failed. Checking err first and deferring
-		// after would leak exactly the container that failed to come up.
-		// Close is nil-safe and safe to call twice; both are tested.
+		// Armed before the error is inspected: openDatabase returns a
+		// non-nil handle whenever a container started, including on paths
+		// where it then failed, and checking err first would leak it.
 		//lint:ignore SA5001 cleanup must be armed before the error is handled
 		defer db.Close()
 
 		switch {
 		case loadFailed != nil:
-			// The author's call, and the right one: a dump that will not load
-			// is the failure being hunted — taxonomy #9 and #4 both surface
-			// exactly here — so it is a verdict, not a broken run. The
-			// database assertions cannot run afterwards, and this line is
-			// their explanation.
+			// A dump that will not load is the failure being hunted
+			// (taxonomy #9, #4), so it is a verdict, not a broken run.
 			fmt.Printf("FAIL  %s: %v\n", t.Name, loadFailed)
 			out.Verdict = report.Fail
 			out.Assertions = append(out.Assertions, report.Assertion{
@@ -268,9 +255,8 @@ func Target(ctx context.Context, t config.Target) report.Target {
 			})
 			skipDatabase = true
 		case err != nil:
-			// Everything else — no container runtime, a missing image, a
-			// database that never came up — is the tool failing, not the
-			// backup.
+			// No container runtime, a missing image, a database that never
+			// came up — the tool failing, not the backup.
 			fmt.Printf("ERROR %s: %v\n", t.Name, err)
 			out.Verdict = report.Error
 			out.Assertions = append(out.Assertions, report.Assertion{

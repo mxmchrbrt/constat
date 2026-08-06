@@ -16,11 +16,7 @@ func init() {
 
 // query_min catches taxonomy #2 (coverage drift) and #6 (retention destroyed
 // it) inside the database: the dump loads perfectly and a table that should
-// have rows has none, or has far fewer than it should.
-//
-// The dump loading is not the same claim as the dump being complete. A
-// retention policy that pruned the wrong thing, or a dump taken with the wrong
-// --table flags, produces a file that restores cleanly and is missing data.
+// have rows has none, or far fewer than it should.
 type queryMin struct {
 	query   string
 	min     int64
@@ -60,11 +56,6 @@ func (a *queryMin) Check(ctx context.Context, env Env) (Result, error) {
 	noRows, err := queryOneValue(ctx, env.DB, a.query, a.timeout, &count)
 
 	if errors.Is(err, errUndefinedTable) {
-		// The author's call, and the reason the SQLSTATE is checked at all: a
-		// table that should exist and does not is failure mode #2, so it is a
-		// verdict about the backup. Every other SQL error stays an error,
-		// because a typo in a column name is the operator's mistake and must
-		// not be reported as a missing backup.
 		return Result{
 			Name:     "query_min",
 			Passed:   false,
@@ -76,10 +67,9 @@ func (a *queryMin) Check(ctx context.Context, env Env) (Result, error) {
 		return Result{}, fmt.Errorf("query_min: %w", err)
 	}
 
-	// A count query always returns exactly one non-NULL row. Getting no rows,
-	// or a NULL, means the query is not a count — the operator's mistake, not
-	// the backup's. Deliberately unlike query_newer_than, where NULL is the
-	// normal way an empty table answers.
+	// A count query always returns one non-NULL row; no rows or NULL means
+	// the query is not a count, unlike query_newer_than where NULL is a
+	// normal empty-table answer.
 	if noRows {
 		return Result{}, fmt.Errorf("query_min: query returned no rows, so there is no number to compare against min")
 	}

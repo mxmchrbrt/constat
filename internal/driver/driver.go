@@ -35,26 +35,12 @@ func NewResticDriver(repo, passwordFile string) *ResticDriver {
 	return &ResticDriver{Repo: repo, PasswordFile: passwordFile}
 }
 
-// noCache is passed to every restic invocation, and it is a correctness
-// requirement rather than a tuning knob.
-//
-// restic caches tree and index packs locally. With a warm cache, a repository
-// whose tree pack has been truncated still restores cleanly and reports
-// success, because the trees are read from ~/.cache/restic and the damaged pack
-// is never touched. Measured, not assumed: it is what the truncated-repo
-// fixture found, and the tool said PASS. Data packs are not cached, so
-// corruption there is caught either way — but half the corruption being
-// invisible is not a usable guarantee.
-//
-// constat is documented as running on the customer's own machine, which is
-// usually the machine that took the backup, so the cache is warm exactly where
-// it does the most damage. Verifying the cache instead of the repository would
-// make failure mode #4 invisible, and #4 is one of the modes this tool exists
-// for.
-//
-// The cost is re-reading the index on every invocation, which is real for a
-// large remote repository. That is the right trade: a verification that might
-// be reading a cache is not a verification.
+// noCache is a correctness requirement, not a tuning knob: restic caches
+// tree and index packs locally, and with a warm cache a repository whose
+// tree pack has been truncated still restores cleanly, since the damaged
+// pack is never read. constat typically runs on the machine that took the
+// backup, where the cache is warmest — verifying the cache instead of the
+// repository would make failure mode #4 (corruption at rest) invisible.
 const noCache = "--no-cache"
 
 func (d *ResticDriver) Latest(ctx context.Context) (*Snapshot, error) {
@@ -113,24 +99,11 @@ func (d *ResticDriver) Restore(ctx context.Context, dest string, paths []string)
 	return nil
 }
 
-// maxErrorOutput bounds how much of restic's output is carried into an error.
-//
-// This is a correctness bound, not tidiness. A restic error carries one line
-// per affected file: a truncated pack in a repository of 400 files produces
-// roughly 276 KB of output, and a real repository has orders of magnitude more
-// files than that. Those bytes do not stay local — the error becomes an
-// assertion message, which is written verbatim into report.json and posted as
-// the webhook body.
-//
-// Left unbounded, the failure compounds in the worst direction: the more
-// broken the backup, the larger the payload, until the alert that was supposed
-// to report the breakage is itself rejected for being oversized. An alert that
-// fails precisely when it matters is worse than no alert.
-//
-// internal/container.trim does the same job for docker/podman output. The two
-// are deliberately separate small copies rather than a shared package: each is
-// a handful of lines with no logic to get wrong, and neither package otherwise
-// depends on the other. A third caller should trigger extraction.
+// maxErrorOutput bounds how much of restic's output reaches an error. A
+// restic error carries one line per affected file — a truncated pack in a
+// 400-file repository produced ~276 KB — and that error becomes a report
+// and webhook body, so an unbounded one grows exactly as the backup gets
+// worse, risking rejection by the destination when the alert matters most.
 const maxErrorOutput = 2000
 
 func trimOutput(out []byte) string {

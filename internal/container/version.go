@@ -9,22 +9,18 @@ import (
 )
 
 // Taxonomy #9, version mismatch: a dump taken from Postgres 16 will not load
-// into 15, and it only ever surfaces at restore time — which is to say, on the
-// day it matters.
+// into 15, and it only surfaces at restore time.
 //
-// Checked before psql runs rather than as an assertion afterwards. An assertion
-// could never fire for the case it exists for: the load fails first, and what
-// the operator gets is a wall of psql errors about unrecognised syntax rather
-// than the one sentence that explains it.
+// Checked before psql runs, not as an assertion afterwards — an assertion
+// could never fire for the case it exists for, since the load fails first
+// and the operator would just see a wall of psql syntax errors.
 //
-// The gate only ever improves the message. A dump whose header it cannot read —
-// custom-format output, hand-written SQL, anything not from pg_dump — is loaded
-// anyway. Refusing to load what it does not understand would turn a diagnostic
-// into an obstacle.
+// A dump whose header cannot be read (custom-format, hand-written SQL) is
+// loaded anyway: this only ever improves the message, never blocks a load
+// it does not understand.
 
-// dumpHeaderScanLimit bounds how much of a dump is read looking for the version
-// line. pg_dump writes it within the first few lines; a dump can be hundreds of
-// gigabytes, and this must never be the thing that reads them.
+// dumpHeaderScanLimit bounds how much of a dump is read looking for the
+// version line; a dump can be hundreds of gigabytes.
 const dumpHeaderScanLimit = 64 * 1024
 
 // dumpVersionMarker is what pg_dump writes into a plain-format dump:
