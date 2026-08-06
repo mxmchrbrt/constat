@@ -4,6 +4,13 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/mxmchrbrt/constat.svg)](https://pkg.go.dev/github.com/mxmchrbrt/constat)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 
+> **Experimental, vibe-coded project.** Nearly all of this codebase was
+> written by Claude (Opus 5), directed and reviewed commit-by-commit rather
+> than typed by hand — this repo is partly an experiment in how far that gets
+> a real tool. It's v0: functional, tested, and honest about its boundaries
+> below, but not yet something to bet production data recovery on without
+> reading the code yourself first.
+
 Prove your backups actually restore. constat takes an existing restic
 repository, restores it into a disposable environment, runs assertions
 against the result, and emits a signed, dated report — then alerts if
