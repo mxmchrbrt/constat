@@ -4,6 +4,8 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/mxmchrbrt/constat.svg)](https://pkg.go.dev/github.com/mxmchrbrt/constat)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 
+![demo](demo.gif)
+
 > **Experimental, vibe-coded project.** Nearly all of this codebase was
 > written by Claude (Opus 5), directed and reviewed commit-by-commit rather
 > than typed by hand — this repo is partly an experiment in how far that gets
