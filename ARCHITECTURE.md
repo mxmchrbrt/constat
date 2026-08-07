@@ -204,6 +204,33 @@ at run time.
 subset to rotate automatically rather than being a fixed fraction per run.
 Rotation belongs to the scheduler, which constat deliberately does not own.
 
+### The report records which Postgres versions were involved
+`verify_with.image` and the dump's declared version are both known at run time,
+and both were previously used only for the pre-load gate and then discarded.
+They are now carried into the report.
+
+The reason is failure mode #9, one level up from the version check itself. The
+correct fix for version mismatch is to pin the source version in
+Infrastructure-as-Code, so the runbook references a recorded fact rather than
+institutional memory. A signed, dated report stating "this dump declared 16.14
+and loaded into 16.10" is the same fact from the other direction: evidence of
+what was true at a specific date, produced by a run that actually happened,
+which is what someone reconstructing a restore a year later needs and rarely
+has.
+
+Recorded before the load outcome is decided, deliberately: the mismatch case is
+where knowing both versions matters most, and a report that drops them exactly
+when the load failed would be useless in the one situation it was written for.
+
+The field is `omitempty` and `schema_version` stays at 1: a file-only target
+adds nothing, so the canonical bytes of an existing report shape are unchanged
+and old signatures keep verifying against what they signed.
+
+**Revisit when:** a second database engine lands. `Database` is
+Postgres-shaped only in that its versions are strings, so this is likely to
+survive MySQL unchanged — but the assumption should be re-examined, not
+inherited.
+
 ### Which database failures are verdicts, and which are broken runs
 The load step is the first place where a failure could honestly be reported
 either way, so the boundary was drawn explicitly:

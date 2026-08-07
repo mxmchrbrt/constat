@@ -55,7 +55,32 @@ type Target struct {
 	// the data.
 	RestoreDurationMs int64 `json:"restore_duration_ms"`
 
+	// Nil for a target with no verify_with block, which keeps the canonical
+	// bytes of a file-only report unchanged.
+	Database *Database `json:"database,omitempty"`
+
 	Assertions []Assertion `json:"assertions"`
+}
+
+// Database records which Postgres the dump declared it came from and which
+// one it was loaded into.
+//
+// This is the report earning the name: pinning the source version in
+// Infrastructure-as-Code prevents the runbook from drifting, but a signed,
+// dated report stating the versions is evidence of what was true at the time,
+// which is what someone reconstructing a restore a year later actually needs
+// (taxonomy #9). Empty strings where a version could not be determined — a
+// custom-format dump carries no readable header.
+type Database struct {
+	// The version pg_dump wrote into the dump header, e.g. "16.14".
+	DumpVersion string `json:"dump_version,omitempty"`
+
+	// The version of the disposable server it was loaded into.
+	ServerVersion string `json:"server_version,omitempty"`
+
+	// The configured verify_with.image, recorded verbatim so the drill is
+	// reproducible from the report alone.
+	Image string `json:"image,omitempty"`
 }
 
 // Report is one run.

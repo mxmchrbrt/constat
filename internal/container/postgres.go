@@ -30,6 +30,21 @@ type Postgres struct {
 
 	// DB is what assertions receive. Closed by Close.
 	DB *sql.DB
+
+	// Versions is what the dump said about itself and what it was loaded
+	// into. Populated as a side effect of the compatibility check, and
+	// carried into the report: the durable answer to "which Postgres was
+	// this backup taken from", which is otherwise institutional memory by
+	// the time anyone needs it (taxonomy #9).
+	Versions Versions
+}
+
+// Versions records the declared version of a dump and the server it met.
+// Either may be empty: a custom-format dump has no readable header, and a
+// server that never came up has no version to report.
+type Versions struct {
+	Dump   string
+	Server string
 }
 
 // LoadError means the dump itself would not load — a distinct type so the
@@ -144,12 +159,19 @@ func (p *Postgres) checkDumpVersion(ctx context.Context, dumpPath string) error 
 	defer f.Close()
 
 	dumpMajor, dumpVersion, ok := parseDumpVersion(f)
+	p.Versions.Dump = dumpVersion
+
+	// Recorded even when the dump's own version is unreadable: knowing what
+	// the drill loaded into is worth having on its own.
+	if serverVersion, err := p.ServerVersion(ctx); err == nil {
+		p.Versions.Server = serverVersion
+	}
+
 	if !ok {
 		return nil
 	}
-
-	serverVersion, err := p.ServerVersion(ctx)
-	if err != nil {
+	serverVersion := p.Versions.Server
+	if serverVersion == "" {
 		// Not fatal: a courtesy check; psql reports the mismatch itself if
 		// there is one.
 		return nil

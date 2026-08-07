@@ -167,6 +167,24 @@ func openDatabase(ctx context.Context, t config.Target, restoreDir string) (db *
 	return pg, nil, nil
 }
 
+// databaseProvenance builds the report's record of which Postgres versions
+// were involved. Nil when there is nothing to say, so a target that never
+// reached a container adds no empty object to the report.
+func databaseProvenance(t config.Target, pg *container.Postgres) *report.Database {
+	d := &report.Database{}
+	if t.VerifyWith != nil {
+		d.Image = t.VerifyWith.Image
+	}
+	if pg != nil {
+		d.DumpVersion = pg.Versions.Dump
+		d.ServerVersion = pg.Versions.Server
+	}
+	if *d == (report.Database{}) {
+		return nil
+	}
+	return d
+}
+
 // Target builds the driver and assertions for t, restores if any assertion
 // needs files, runs every assertion, and reports PASS/FAIL/ERROR per
 // assertion to stdout. One broken assertion does not stop the others.
@@ -241,6 +259,11 @@ func Target(ctx context.Context, t config.Target) report.Target {
 		// where it then failed, and checking err first would leak it.
 		//lint:ignore SA5001 cleanup must be armed before the error is handled
 		defer db.Close()
+
+		// Recorded before the outcome is decided: a version mismatch that
+		// fails the load is exactly the case where knowing both versions
+		// matters most.
+		out.Database = databaseProvenance(t, db)
 
 		switch {
 		case loadFailed != nil:

@@ -91,6 +91,7 @@ const htmlSource = `<!doctype html>
 <section class="target">
   <h2>{{.Name}} <span class="verdict {{class .Verdict}}">{{upper .Verdict}}</span></h2>
   <div class="meta">{{.Kind}} · {{.Repository}}{{if .RestoreDurationMs}} · restored in {{ms .RestoreDurationMs}}{{end}}</div>
+  {{with .Database}}<div class="meta">{{with .DumpVersion}}dump from PostgreSQL {{.}}{{end}}{{with .ServerVersion}} · loaded into {{.}}{{end}}{{with .Image}} · {{.}}{{end}}</div>{{end}}
   <table>
     <thead><tr><th>assertion</th><th>verdict</th><th>message</th><th>duration</th></tr></thead>
     <tbody>
