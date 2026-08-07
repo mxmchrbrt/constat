@@ -1,7 +1,8 @@
 # The fixture corpus
 
 Backups that are broken in named, deliberate ways, one per failure mode from
-`CLAUDE.md`. Unit tests say the code does what the code does; these say the tool
+[`docs/failure-modes.md`](../../docs/failure-modes.md). Unit tests say the code
+does what the code does; these say the tool
 reaches the right conclusion about a real, specific failure. That is what makes
 the assertions provably correct rather than plausible, and nobody else has this
 corpus.
@@ -59,6 +60,7 @@ use a relative mtime, because "recent" is only true relative to now.
 | `stale-snapshot` | #1 silent non-execution | Both age checks fail; content checks pass, because nothing is missing. |
 | `missing-directory` | #2 coverage drift | Every age check passes. Only an assertion naming the missing directory finds it. |
 | `truncated-repo` | #4 corruption at rest | The snapshot still lists fine; the restore is what fails. |
+| `orphaned-pack-rot` | #4 corruption at rest | The restore passes and the repository is still damaged. See below. |
 | `permissions-stripped` | #7 restores but won't boot | Nothing catches it yet. See below. |
 
 ## `permissions-stripped` expects a clean run, on purpose
@@ -82,3 +84,18 @@ warm exactly where it does the most damage.
 
 The driver now passes `--no-cache`. The fixture that found it is the reason the
 corpus exists.
+
+## What `orphaned-pack-rot` is for
+
+`truncated-repo` is often read as "a restore drill beats `restic check`". It
+does not: a truncated pack is a size mismatch against the index, and plain
+`restic check` reports it without downloading anything.
+
+`orphaned-pack-rot` is the case where the two genuinely differ. It holds two
+snapshots, and the damage is in packs only the older one references. A restore
+of the newest snapshot reads none of them, so the restore passes, every file
+assertion passes, and the repository is damaged anyway. Only `repository_check`
+fails.
+
+Stated as a fixture rather than as a claim in a README, because the claim is
+the sort that is easy to assert and easy to get wrong.

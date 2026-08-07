@@ -164,12 +164,38 @@ sudo systemctl enable --now constat.timer
 | `newest_file_age_max` | The job still runs, but stopped capturing new data |
 | `path_exists` | A restore that succeeds but the app won't boot |
 | `file_count_min` | A directory silently dropped from the backup's scope |
+| `repository_check` | Corruption in packs no restore reads — including in older snapshots |
 | `query_min` | A table that should have rows and doesn't (bad retention, wrong dump flags) |
 | `query_newer_than` | The database dump loads fine and the data inside it is stale |
 
 Each one exists because it catches a specific, named failure — see
-`CLAUDE.md`'s failure taxonomy for the reasoning behind each, and
-`ARCHITECTURE.md` for the design decisions and why each one was made.
+[`docs/failure-modes.md`](docs/failure-modes.md) for the reasoning behind each,
+and `ARCHITECTURE.md` for the design decisions and why each one was made.
+
+### A restore drill is not a repository check
+
+They cover different ground, and running one is not an argument for skipping
+the other:
+
+- A **restore** reads only the packs the restored snapshot references. Damage
+  to a pack reachable only from an older snapshot survives every green drill.
+- **`restic check`** walks the whole repository. Structure only by default —
+  index consistency, blob accounting, pack presence and size — which is cheap
+  enough to run every time and catches truncated uploads and broken chains.
+- **`--read-data-subset`** is what reads pack contents back and compares them
+  against the recorded hashes, so it is the only one that catches a silent bit
+  flip. It costs bandwidth, so it belongs on a rotation:
+
+```yaml
+    assert:
+      - repository_check:
+          read_data_subset: 5%
+```
+
+And none of the three is a substitute for having more than one copy. Verifying
+the copy in front of you says nothing about the others — point constat at each
+independent copy as its own target, which is what makes 3-2-1 a checked
+property rather than an intention.
 
 ## Running the tests
 

@@ -1,0 +1,23 @@
+failure_mode: 4
+title: Corruption at rest, in a pack no restore reads
+notes: >
+  Two snapshots. The newest is intact, so the restore succeeds and both file
+  assertions pass — this fixture's whole point is that they do. The damage is
+  in packs only the older snapshot references, which a restore of the latest
+  snapshot never touches.
+
+  This is the case that separates a restore drill from a repository check: a
+  setup that only ever restores the newest snapshot stays green here until the
+  day someone needs the older one. repository_check walks the whole repository
+  and is the assertion that fails.
+
+  Structure-only, note: no read_data_subset. A truncated pack is a size
+  mismatch against the index, which restic detects without downloading pack
+  contents. Reading data back is for the pack that is present, correctly sized,
+  and wrong inside.
+target_passes: false
+asserts:
+  - newest_snapshot_age_max: 24h
+  - path_exists: config.php
+  - repository_check:
+verdicts: [pass, pass, fail]

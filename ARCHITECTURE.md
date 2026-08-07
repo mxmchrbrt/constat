@@ -168,6 +168,42 @@ be the last one.
 their run, or a second flag joins it — at which point this stops being one
 constant and becomes a deliberate "verification profile" for the driver.
 
+### `repository_check` exists because a restore drill is not a repository check
+A restore reads only the packs the restored snapshot references. That is the
+whole coverage of a drill, and it leaves a real gap: a pack reachable only from
+an older snapshot can be truncated or rotted and every run stays green, right
+up until the day someone needs that older snapshot.
+
+`restic check` walks the whole repository, so it is the assertion that covers
+what the restore structurally cannot. The default is structure-only —
+deliberately, because the argument for it is that it is cheap enough to leave
+on. It verifies index consistency, that every referenced blob is accounted for,
+and that packs are present at the size they claim, which is the realistic
+failure set for a cloud backend (truncated upload, missing object, broken
+chain) without downloading pack contents.
+
+`read_data_subset` is opt-in for the opposite reason. It is what actually reads
+packs back and compares them against recorded hashes, so it is the only thing
+that catches a pack that is present, correctly sized and wrong inside — and it
+costs bandwidth proportional to the fraction read. Defaulting it on would make
+the assertion expensive enough that people stop running it, which trades a
+partial check for no check.
+
+The value is validated at config load, not left to restic. A typo in
+`read_data_subset` makes restic exit non-zero, and this assertion reads a
+non-zero exit as a damaged repository — so an unvalidated typo would page
+someone about corruption that does not exist. That is the one false alarm a
+verification tool cannot afford.
+
+`RepositoryChecker` is an optional interface rather than a method on `Driver`:
+a driver that cannot verify a whole repository should fail to build the
+assertion with a clear message, not carry a method that returns "unsupported"
+at run time.
+
+**Revisit when:** a second driver implements it, or an operator wants the
+subset to rotate automatically rather than being a fixed fraction per run.
+Rotation belongs to the scheduler, which constat deliberately does not own.
+
 ### Which database failures are verdicts, and which are broken runs
 The load step is the first place where a failure could honestly be reported
 either way, so the boundary was drawn explicitly:

@@ -74,6 +74,57 @@ targets:
           min: 1000
           path: data
 
+      # Failure mode #4 (corruption at rest), in the part of the repository
+      # a restore never reaches: the restore above reads only the packs this
+      # snapshot references, so a pack that only older snapshots point at can
+      # rot through every green run. `restic check` walks all of it.
+      #
+      # Structure-only (no read_data_subset) verifies index consistency, blob
+      # accounting, and that packs are present at the size they claim —
+      # cheap, even on metered storage, and enough for truncated uploads and
+      # broken chains. Add read_data_subset to also read pack contents back
+      # and compare them against the recorded hashes, which is the only way
+      # to catch a silent bit flip:
+      #
+      #   - repository_check:
+      #       read_data_subset: 5%      # or "1/12", or "50M"
+      #
+      # That costs bandwidth, so it is usually a weekly or monthly target
+      # rather than something on every run.
+      - repository_check:
+
+  # --- a second, independent copy ----------------------------------------
+  # 3-2-1 is what survives corruption; verification is what tells you a copy
+  # went bad. They are complementary, and neither substitutes for the other:
+  # checking the copy in front of you says nothing about the other two.
+  #
+  # Each copy is its own target, because that is the only way the offsite one
+  # is ever actually exercised. Note the separate password file: a copy that
+  # can only be opened with the primary's credentials is failure mode #5
+  # waiting to happen.
+  - name: nextcloud-files-offsite
+    source:
+      kind: restic
+      repo: sftp:backup@offsite.example.net:/srv/restic/nextcloud
+      password_file: /etc/constat/nextcloud-offsite.pass
+
+    restore:
+      paths: ["/var/lib/nextcloud/data"]
+      strip_prefix: /var/lib/nextcloud/data
+
+    # Restoring over a slow link is itself the RTO measurement (failure mode
+    # #10) — if this timeout is the one that keeps tripping, that is the
+    # finding, not a config problem.
+    timeout: 2h
+
+    assert:
+      # Deliberately laxer than the primary: an offsite copy that syncs daily
+      # is expected to lag, and alerting on the lag you designed teaches
+      # people to ignore the alert.
+      - newest_snapshot_age_max: 48h
+      - path_exists: config.php
+      - repository_check:
+
   # --- database path -----------------------------------------------------
   - name: app-db
     source:

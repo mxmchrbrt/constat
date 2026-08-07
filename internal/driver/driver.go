@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -24,6 +25,33 @@ type Driver interface {
 	// against paths inside the snapshot). An empty paths restores everything.
 	Restore(ctx context.Context, dest string, paths []string) error
 }
+
+// RepositoryChecker is implemented by drivers whose backend can verify the
+// whole repository, not just the snapshot a restore happens to read.
+//
+// Optional rather than part of Driver: a driver that cannot do this should
+// fail to build the assertion with a clear message, not carry a method that
+// returns "unsupported".
+type RepositoryChecker interface {
+	// CheckRepository verifies repository structure. readDataSubset, when
+	// non-empty, is passed to restic's --read-data-subset to additionally
+	// read back that fraction of pack contents and compare it against the
+	// recorded hashes.
+	//
+	// A repository that is actually damaged returns *CheckFailure; anything
+	// else (no binary, no credentials, a cancelled context) returns an
+	// ordinary error, because the difference is the difference between a
+	// verdict about the backup and a broken run.
+	CheckRepository(ctx context.Context, readDataSubset string) error
+}
+
+// CheckFailure is a repository that failed verification — damage found, as
+// opposed to a check that could not be performed.
+type CheckFailure struct {
+	Output string
+}
+
+func (e *CheckFailure) Error() string { return e.Output }
 
 // ResticDriver implements Driver against a restic repository.
 type ResticDriver struct {
@@ -97,6 +125,105 @@ func (d *ResticDriver) Restore(ctx context.Context, dest string, paths []string)
 		return fmt.Errorf("restic restore: %w (output: %s)", err, trimOutput(out))
 	}
 	return nil
+}
+
+// CheckRepository runs `restic check`, optionally reading back a subset of
+// pack data.
+//
+// This covers what a restore cannot: a restore reads only the packs its own
+// snapshot references, so damage to a pack reachable only from an older
+// snapshot survives every successful drill. check walks the whole repository.
+//
+// Without --read-data-subset it verifies structure — index consistency, that
+// every referenced blob is accounted for, that packs are present and the size
+// they claim. That catches truncated and missing uploads and broken chains
+// cheaply, including on metered backends. It does not read pack contents back,
+// so a pack that is present, correctly sized and wrong inside needs the
+// subset argument, which is why it exists as a knob rather than a default:
+// reading everything is exactly the cost that makes people stop running it.
+func (d *ResticDriver) CheckRepository(ctx context.Context, readDataSubset string) error {
+	args := []string{
+		"-r", d.Repo,
+		"--password-file", d.PasswordFile,
+		noCache,
+		"check",
+	}
+	if readDataSubset != "" {
+		args = append(args, "--read-data-subset="+readDataSubset)
+	}
+
+	cmd := exec.CommandContext(ctx, "restic", args...)
+
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+
+	// A non-zero exit from a process that actually ran is restic's answer
+	// about the repository. Everything else — no binary, no permission, a
+	// deadline — is constat failing to ask the question.
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && ctx.Err() == nil {
+		return &CheckFailure{Output: summariseCheck(out)}
+	}
+	return fmt.Errorf("restic check: %w (output: %s)", err, trimOutput(out))
+}
+
+// checkNoise is what `restic check` prints on its way to the answer: progress
+// steps, and the advisory paragraph it appends after any failure.
+//
+// Dropped because this output becomes a report line and a webhook body. The
+// operator needs the sentence naming the damaged pack, and shipping it inside
+// two kilobytes of boilerplate is how that sentence gets missed. Matching on
+// noise rather than on signal is deliberate: an unrecognised line is kept, so
+// a future restic phrasing degrades to verbose rather than to silent.
+var checkNoise = []string{
+	"create exclusive lock for repository",
+	"load indexes",
+	"check all packs",
+	"check snapshots, trees and blobs",
+	"The repository contains damaged pack files",
+	"Damaged pack files can be caused by",
+	"Please read the troubleshooting guide",
+	"restic repair packs",
+	"restic repair snapshots",
+}
+
+func summariseCheck(out []byte) string {
+	var kept []string
+	var last string
+
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "[") { // "[0:00] 100.00% 2 / 2 snapshots"
+			continue
+		}
+
+		noise := false
+		for _, prefix := range checkNoise {
+			if strings.HasPrefix(line, prefix) {
+				noise = true
+				break
+			}
+		}
+		if noise {
+			continue
+		}
+
+		// restic reports the same unreadable pack once per read attempt.
+		if line == last {
+			continue
+		}
+		last = line
+		kept = append(kept, line)
+	}
+
+	if len(kept) == 0 {
+		// Nothing recognised: better verbose than empty, since something
+		// made restic exit non-zero.
+		return trimOutput(out)
+	}
+	return trimOutput([]byte(strings.Join(kept, "; ")))
 }
 
 // maxErrorOutput bounds how much of restic's output reaches an error. A

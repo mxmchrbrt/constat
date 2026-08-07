@@ -3,8 +3,13 @@
 #
 # A pack file was truncated after the fact: a half-finished upload, a full disk,
 # bit rot. The snapshot metadata is untouched, so the repository still lists a
-# recent snapshot and looks healthy from the outside. Only a real restore finds
-# it, which is the entire argument for this tool over `restic check`.
+# recent snapshot and looks healthy from the outside, and the restore is what
+# fails.
+#
+# `restic check` also catches this one — a truncated pack is a size mismatch
+# against the index — so this fixture is not an argument that a restore drill
+# replaces a repository check. See orphaned-pack-rot for the damage a restore
+# genuinely cannot see, and repository_check for the assertion that does.
 . "$(dirname "$0")/../lib.sh"
 
 fixture_init "$@"
